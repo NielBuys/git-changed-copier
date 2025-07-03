@@ -165,15 +165,18 @@ function TMainFrm.GetChangedSQLFilesFromTag(
 var
   GitProcess: TProcess;
   OutputLines: TStringList;
-  i, FilteredCount, ProgressIndex: Integer;
+  i, ProgressIndex: Integer;
   FileName, SrcFilePath, DestDir, DestFilePath, FilterExt: string;
-  SearchRec: TSearchRec;
   ValidFiles: TStringList;
+  OutputStream: TMemoryStream;
+  Buffer: array[0..2047] of byte;
+  BytesRead: LongInt;
 begin
   Result := TStringList.Create;
   OutputLines := TStringList.Create;
   ValidFiles := TStringList.Create;
   GitProcess := TProcess.Create(nil);
+  OutputStream := TMemoryStream.Create;
   try
     // Set up destination directory
     DestDir := IncludeTrailingPathDelimiter(ToBasePath) + ToGitTag;
@@ -185,7 +188,9 @@ begin
       OutputLines.Free;
       ValidFiles.Free;
       GitProcess.Free;
-      raise Exception.Create('Destination folder "' + DestDir + '" already exists and is not empty.');
+      OutputStream.Free;
+      ShowMessage('Destination folder "' + DestDir + '" already exists and is not empty.');
+      Exit;
     end;
 
     // Prepare Git process
@@ -198,7 +203,27 @@ begin
     GitProcess.Parameters.Add('HEAD');
     GitProcess.Execute;
 
-    OutputLines.LoadFromStream(GitProcess.Output);
+    // Read the full output from Git to avoid truncation
+    while GitProcess.Running do
+    begin
+      if GitProcess.Output.NumBytesAvailable > 0 then
+      begin
+        BytesRead := GitProcess.Output.Read(Buffer, SizeOf(Buffer));
+        OutputStream.Write(Buffer, BytesRead);
+      end
+      else
+        Sleep(10);
+    end;
+
+    // Final read after process ends
+    while GitProcess.Output.NumBytesAvailable > 0 do
+    begin
+      BytesRead := GitProcess.Output.Read(Buffer, SizeOf(Buffer));
+      OutputStream.Write(Buffer, BytesRead);
+    end;
+
+    OutputStream.Position := 0;
+    OutputLines.LoadFromStream(OutputStream);
 
     // Normalize extension filter (e.g., '*.sql' → '.sql')
     FilterExt := LowerCase(ExtractFileExt(FileFilter));
@@ -207,6 +232,7 @@ begin
     for i := 0 to OutputLines.Count - 1 do
     begin
       FileName := Trim(OutputLines[i]);
+
       if (FilterExt = '') or (LowerCase(ExtractFileExt(FileName)) = FilterExt) then
         ValidFiles.Add(FileName);
     end;
@@ -236,13 +262,14 @@ begin
 
       // Update progress bar
       ProgressBar1.Position := ProgressIndex + 1;
-      Application.ProcessMessages; // Ensure UI updates
+      Application.ProcessMessages;
     end;
 
   finally
     GitProcess.Free;
     OutputLines.Free;
     ValidFiles.Free;
+    OutputStream.Free;
   end;
 end;
 
