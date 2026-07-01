@@ -13,10 +13,12 @@ type
   { TMainFrm }
 
   TMainFrm = class(TForm)
+    AddDependentFilesBtn: TButton;
     BaseFolderLbl: TLabel;
-    testBtn: TButton;
     CopiedFilesStringGrid: TStringGrid;
     CopyChangedFilesBtn: TButton;
+    DependentSQLFoldersEdt: TEdit;
+    DependentSQLFoldersLbl: TLabel;
     ExportChangedFilesBtn: TButton;
     FiltersEdt: TEdit;
     FiltersLbl: TLabel;
@@ -24,6 +26,8 @@ type
     FromBaseFolderLbl: TLabel;
     FromTagEdt: TEdit;
     FromTagLbl: TLabel;
+    MainSQLFolderEdt: TEdit;
+    MainSQLFolderLbl: TLabel;
     PageControl1: TPageControl;
     CopyChangedGitFilesTab: TTabSheet;
     ProgressBar1: TProgressBar;
@@ -31,19 +35,21 @@ type
     ToBaseFolderEdt: TEdit;
     ToGitTagEdt: TEdit;
     ToGitTagLbl: TLabel;
+    procedure AddDependentFilesBtnClick(Sender: TObject);
     procedure CopyChangedFilesBtnClick(Sender: TObject);
     procedure ExportChangedFilesBtnClick(Sender: TObject);
     procedure FormClose(Sender: TObject; var CloseAction: TCloseAction);
     procedure FormShow(Sender: TObject);
-    procedure testBtnClick(Sender: TObject);
   private
-    procedure CopyReferencedSQLEntities(const ToBasePath, FromBasePath,
-      ReferenceRelPath, SearchRelPath, CopyRelPath: string);
-    function ExtractObjectName(const Line, Keyword: string): string;
     function FolderHasAnyFiles(const Dir: string): Boolean;
-    function GetChangedSQLFilesFromTag(
-      const FromGitTag, FromBasePath, FileFilter, ToBasePath, ToGitTag: string): TStringList;
-
+    function GetChangedFilesList(
+      const FromGitTag, FromBasePath, FileFilter: string): TStringList;
+    function CopyFilesToDest(Files: TStringList;
+      const FromBasePath, DestDir: string): TStringList;
+    function FindDependentEquivalents(ChangedFiles: TStringList;
+      const FromBasePath, MainSQLRel, DependentRels: string): TStringList;
+    function NormalizedName(const AName: string): string;
+    procedure ShowFilesInGrid(Files: TStringList);
   public
 
   end;
@@ -59,31 +65,74 @@ implementation
 
 procedure TMainFrm.CopyChangedFilesBtnClick(Sender: TObject);
 var
-  ChangedFiles: TStringList;
-  i: Integer;
+  ChangedFiles, Copied: TStringList;
+  DestDir: string;
 begin
+  DestDir := IncludeTrailingPathDelimiter(ToBaseFolderEdt.Text) + ToGitTagEdt.Text;
+
+  // Check if destination folder exists and is not empty
+  if DirectoryExists(DestDir) and FolderHasAnyFiles(DestDir) then
+  begin
+    ShowMessage('Destination folder "' + DestDir + '" already exists and is not empty.');
+    Exit;
+  end;
+
+  ChangedFiles := GetChangedFilesList(
+    FromTagEdt.Text,          // the tag to diff from
+    FromBaseFolderEdt.Text,   // path to Git repo (repo root)
+    FiltersEdt.Text);         // extension filter, e.g. *.sql (blank / *.* = all)
   try
-    ChangedFiles := GetChangedSQLFilesFromTag(
-      FromTagEdt.Text,                     // FromGitTag: the tag to diff from
-      FromBaseFolderEdt.Text,         // FromBasePath: path to Git repo
-      FiltersEdt.Text,                      // FileFilter: only match .sql files
-      ToBaseFolderEdt.Text,                // ToBasePath: root export location
-      ToGitTagEdt.text              // ToGitTag: subfolder to create under ToBasePath
-    );
-
-    // Prepare the StringGrid
-    CopiedFilesStringGrid.RowCount := ChangedFiles.Count + 1; // +1 for header
-    CopiedFilesStringGrid.ColCount := 1;
-    CopiedFilesStringGrid.Cells[0, 0] := 'Copied SQL Files'; // header
-    CopiedFilesStringGrid.ColWidths[0] := 300; // Set column width
-    CopiedFilesStringGrid.FixedRows := 1;
-
-    // Fill the grid
-    for i := 0 to ChangedFiles.Count - 1 do
-    begin
-      CopiedFilesStringGrid.Cells[0, i + 1] := ChangedFiles[i];
+    Copied := CopyFilesToDest(ChangedFiles, FromBaseFolderEdt.Text, DestDir);
+    try
+      ShowFilesInGrid(Copied);
+    finally
+      Copied.Free;
     end;
+  finally
+    ChangedFiles.Free;
+  end;
+end;
 
+procedure TMainFrm.AddDependentFilesBtnClick(Sender: TObject);
+var
+  ChangedFiles, Deps, Copied: TStringList;
+  DestDir: string;
+begin
+  if Trim(MainSQLFolderEdt.Text) = '' then
+  begin
+    ShowMessage('Please enter the Main SQL Folder (e.g. SQL\WineMS2).');
+    Exit;
+  end;
+  if Trim(DependentSQLFoldersEdt.Text) = '' then
+  begin
+    ShowMessage('Please enter one or more Dependent SQL Folders ' +
+      '(e.g. SQL\JuiceMS;SQL\OliveMS;SQL\FarmMS).');
+    Exit;
+  end;
+
+  DestDir := IncludeTrailingPathDelimiter(ToBaseFolderEdt.Text) + ToGitTagEdt.Text;
+
+  // Re-run the same diff used by "Copy Changed Files" to know which main files changed.
+  ChangedFiles := GetChangedFilesList(
+    FromTagEdt.Text, FromBaseFolderEdt.Text, FiltersEdt.Text);
+  try
+    // For each changed file under the main SQL folder, find files with the same
+    // name in the dependent folders (the module-specific version of that object).
+    Deps := FindDependentEquivalents(ChangedFiles, FromBaseFolderEdt.Text,
+      MainSQLFolderEdt.Text, DependentSQLFoldersEdt.Text);
+    try
+      Copied := CopyFilesToDest(Deps, FromBaseFolderEdt.Text, DestDir);
+      try
+        ShowFilesInGrid(Copied);
+        ShowMessage(Format(
+          'Added %d dependent file(s) matching %d changed main file(s).',
+          [Copied.Count, ChangedFiles.Count]));
+      finally
+        Copied.Free;
+      end;
+    finally
+      Deps.Free;
+    end;
   finally
     ChangedFiles.Free;
   end;
@@ -141,6 +190,8 @@ begin
     Ini.WriteString('Settings', 'ToGitTag', ToGitTagEdt.Text);
     Ini.WriteString('Settings', 'FromTag', FromTagEdt.Text);
     Ini.WriteString('Settings', 'Filters', FiltersEdt.Text);
+    Ini.WriteString('Settings', 'MainSQLFolder', MainSQLFolderEdt.Text);
+    Ini.WriteString('Settings', 'DependentSQLFolders', DependentSQLFoldersEdt.Text);
   finally
     Ini.Free;
   end;
@@ -161,59 +212,35 @@ begin
       ToGitTagEdt.Text := Ini.ReadString('Settings', 'ToGitTag', '');
       FromTagEdt.Text := Ini.ReadString('Settings', 'FromTag', '');
       FiltersEdt.Text := Ini.ReadString('Settings', 'Filters', '');
+      MainSQLFolderEdt.Text := Ini.ReadString('Settings', 'MainSQLFolder', '');
+      DependentSQLFoldersEdt.Text := Ini.ReadString('Settings', 'DependentSQLFolders', '');
     finally
       Ini.Free;
     end;
   end;
 end;
 
-procedure TMainFrm.testBtnClick(Sender: TObject);
-begin
-  CopyReferencedSQLEntities(
-    ToBaseFolderEdt.Text,      // e.g., 'D:\MyProject'
-    FromBaseFolderEdt.Text,    // e.g., 'D:\MyRepo'
-    'SQL\WineMS\Views',                 // e.g., 'SQL\WineMS\'
-    'SQL\JuiceMS\Views',      // e.g., 'SQL\JuiceMS\'
-    'SQL\JuiceMS\Views'         // e.g., 'SQL\JuiceMS\'
-  );
-end;
-
-function TMainFrm.GetChangedSQLFilesFromTag(
-  const FromGitTag, FromBasePath, FileFilter, ToBasePath, ToGitTag: string): TStringList;
+{ Runs `git diff --name-only <FromGitTag> HEAD` in FromBasePath and returns the
+  changed file paths (relative to the repo root) that match the extension filter.
+  Paths are normalized to the Windows path delimiter. }
+function TMainFrm.GetChangedFilesList(
+  const FromGitTag, FromBasePath, FileFilter: string): TStringList;
 var
   GitProcess: TProcess;
   OutputLines: TStringList;
-  i, ProgressIndex: Integer;
-  FileName, SrcFilePath, DestDir, DestFilePath, FilterExt: string;
-  ValidFiles: TStringList;
   OutputStream: TMemoryStream;
   Buffer: array[0..2047] of byte;
   BytesRead: LongInt;
+  i: Integer;
+  FileName, FilterExt: string;
 begin
   Result := TStringList.Create;
   OutputLines := TStringList.Create;
-  ValidFiles := TStringList.Create;
-  GitProcess := TProcess.Create(nil);
   OutputStream := TMemoryStream.Create;
+  GitProcess := TProcess.Create(nil);
   try
-    // Set up destination directory
-    DestDir := IncludeTrailingPathDelimiter(ToBasePath) + ToGitTag;
-
-    // Check if destination folder exists and is not empty
-    if DirectoryExists(DestDir) and FolderHasAnyFiles(DestDir) then
-    begin
-      Result.Free;
-      OutputLines.Free;
-      ValidFiles.Free;
-      GitProcess.Free;
-      OutputStream.Free;
-      ShowMessage('Destination folder "' + DestDir + '" already exists and is not empty.');
-      Exit;
-    end;
-
-    // Prepare Git process
     GitProcess.Executable := 'git';
-    GitProcess.Options := [poUsePipes];
+    GitProcess.Options := [poUsePipes, poNoConsole];
     GitProcess.CurrentDirectory := FromBasePath;
     GitProcess.Parameters.Add('diff');
     GitProcess.Parameters.Add('--name-only');
@@ -243,149 +270,192 @@ begin
     OutputStream.Position := 0;
     OutputLines.LoadFromStream(OutputStream);
 
-    // Normalize extension filter (e.g., '*.sql' → '.sql')
+    // Normalize extension filter (e.g., '*.sql' -> '.sql'). Blank, '*' or '*.*' = all.
     FilterExt := LowerCase(ExtractFileExt(FileFilter));
 
-    // First filter the relevant files
     for i := 0 to OutputLines.Count - 1 do
     begin
       FileName := Trim(OutputLines[i]);
+      if FileName = '' then
+        Continue;
 
-      if (FilterExt = '') or (LowerCase(ExtractFileExt(FileName)) = FilterExt) then
-        ValidFiles.Add(FileName);
-    end;
+      // Git reports forward slashes; convert so nested folders are created correctly.
+      FileName := StringReplace(FileName, '/', PathDelim, [rfReplaceAll]);
 
-    // Setup and reset ProgressBar
-    ProgressBar1.Min := 0;
-    ProgressBar1.Max := ValidFiles.Count;
-    ProgressBar1.Position := 0;
-
-    // Create destination directory
-    ForceDirectories(DestDir);
-
-    // Copy files with progress
-    for ProgressIndex := 0 to ValidFiles.Count - 1 do
-    begin
-      FileName := ValidFiles[ProgressIndex];
-      SrcFilePath := IncludeTrailingPathDelimiter(FromBasePath) + FileName;
-      DestFilePath := IncludeTrailingPathDelimiter(DestDir) + FileName;
-
-      ForceDirectories(ExtractFilePath(DestFilePath));
-
-      if FileExists(SrcFilePath) then
-      begin
-        CopyFile(SrcFilePath, DestFilePath);
+      if (FilterExt = '') or (FilterExt = '.*') or
+         (LowerCase(ExtractFileExt(FileName)) = FilterExt) then
         Result.Add(FileName);
-      end;
-
-      // Update progress bar
-      ProgressBar1.Position := ProgressIndex + 1;
-      Application.ProcessMessages;
     end;
-
   finally
     GitProcess.Free;
     OutputLines.Free;
-    ValidFiles.Free;
     OutputStream.Free;
   end;
 end;
 
-procedure TMainFrm.CopyReferencedSQLEntities(
-  const ToBasePath, FromBasePath,
-  ReferenceRelPath, SearchRelPath, CopyRelPath: string);
+{ Copies each relative file from FromBasePath into DestDir, preserving the folder
+  structure. Drives the progress bar. Returns the list of files actually copied. }
+function TMainFrm.CopyFilesToDest(Files: TStringList;
+  const FromBasePath, DestDir: string): TStringList;
 var
-  SQLObjects: TStringList;
-  FileList: TStringList;
-  SR: TSearchRec;
-  RefPath, SearchPath, CopyPath, FilePath, Line, LowerLine, MatchFile, ObjName: string;
-  i, j: Integer;
+  i: Integer;
+  FileName, SrcFilePath, DestFilePath: string;
 begin
-  SQLObjects := TStringList.Create;
-  FileList := TStringList.Create;
-  try
-    RefPath := IncludeTrailingPathDelimiter(ToBasePath) + IncludeTrailingPathDelimiter(ReferenceRelPath);
-    SearchPath := IncludeTrailingPathDelimiter(FromBasePath) + IncludeTrailingPathDelimiter(SearchRelPath);
-    CopyPath := IncludeTrailingPathDelimiter(ToBasePath) + IncludeTrailingPathDelimiter(CopyRelPath);
+  Result := TStringList.Create;
 
-    // Clear and set up the grid
-    with CopiedFilesStringGrid do
+  ForceDirectories(DestDir);
+
+  ProgressBar1.Min := 0;
+  ProgressBar1.Max := Files.Count;
+  ProgressBar1.Position := 0;
+
+  for i := 0 to Files.Count - 1 do
+  begin
+    FileName := Files[i];
+    SrcFilePath := IncludeTrailingPathDelimiter(FromBasePath) + FileName;
+    DestFilePath := IncludeTrailingPathDelimiter(DestDir) + FileName;
+
+    ForceDirectories(ExtractFilePath(DestFilePath));
+
+    if FileExists(SrcFilePath) then
     begin
-      RowCount := 1;
-      ColCount := 1;
-      Cells[0, 0] := 'SQL Object Name';
+      if CopyFile(SrcFilePath, DestFilePath) then
+        Result.Add(FileName);
     end;
 
-    ShowMessage('Searching in: ' + RefPath);
-
-    // Step 1: Extract object names from reference path
-    if FindFirst(RefPath + '*.sql', faAnyFile, SR) = 0 then
-    repeat
-      FilePath := RefPath + SR.Name;
-      FileList.LoadFromFile(FilePath);
-      for i := 0 to FileList.Count - 1 do
-      begin
-        Line := Trim(FileList[i]);
-        LowerLine := LowerCase(Line);
-
-        ObjName := '';
-        if (Pos('create view', LowerLine) = 1) or
-           (Pos('alter view', LowerLine) = 1) or
-           (Pos('create or alter view', LowerLine) = 1) then
-          ObjName := ExtractObjectName(Line, 'create or alter view')
-
-        else if (Pos('create function', LowerLine) = 1) or
-                (Pos('alter function', LowerLine) = 1) or
-                (Pos('create or alter function', LowerLine) = 1) then
-          ObjName := ExtractObjectName(Line, 'create or alter function')
-
-        else if (Pos('create procedure', LowerLine) = 1) or
-                (Pos('alter procedure', LowerLine) = 1) or
-                (Pos('create or alter procedure', LowerLine) = 1) or
-                (Pos('create proc', LowerLine) = 1) or
-                (Pos('alter proc', LowerLine) = 1) or
-                (Pos('create or alter proc', LowerLine) = 1) then
-          ObjName := ExtractObjectName(Line, 'create or alter procedure')
-        else
-          Continue;
-
-        if (ObjName <> '') and (SQLObjects.IndexOf(ObjName) = -1) then
-        begin
-          SQLObjects.Add(ObjName);
-          // Add to StringGrid
-          with CopiedFilesStringGrid do
-          begin
-            RowCount := RowCount + 1;
-            Cells[0, RowCount - 1] := ObjName;
-          end;
-        end;
-      end;
-    until FindNext(SR) <> 0;
-    FindClose(SR);
-
-    // Step 2: Copy matched files from search path
-    if FindFirst(SearchPath + '*.*', faAnyFile, SR) = 0 then
-    repeat
-      MatchFile := SR.Name;
-      for j := 0 to SQLObjects.Count - 1 do
-      begin
-        if Pos(SQLObjects[j], MatchFile) > 0 then
-        begin
-          FilePath := SearchPath + MatchFile;
-          ForceDirectories(CopyPath);
-          CopyFile(PChar(FilePath), PChar(CopyPath + MatchFile));
-          Break;
-        end;
-      end;
-    until FindNext(SR) <> 0;
-    FindClose(SR);
-
-    ShowMessage('Referenced SQL files copied and listed successfully.');
-
-  finally
-    SQLObjects.Free;
-    FileList.Free;
+    ProgressBar1.Position := i + 1;
+    Application.ProcessMessages;
   end;
+end;
+
+{ For every changed file located under MainSQLRel, look up files with a matching
+  name inside each of the DependentRels folders (';'-separated, relative to the
+  repo root) and return their repo-relative paths. These are the module-specific
+  versions (e.g. JuiceMS) of an object whose main (WineMS2) version changed but
+  whose own copy was not touched in git.
+
+  Matching ignores a leading run-order prefix (1-2 digits + '_', e.g. '1_' in
+  '1_vwDispatches.sql') on either side, so '0_vwProduct.sql' matches 'vwProduct.sql'.
+  See NormalizedName for the details. }
+function TMainFrm.FindDependentEquivalents(ChangedFiles: TStringList;
+  const FromBasePath, MainSQLRel, DependentRels: string): TStringList;
+var
+  DepList, DepFiles, DepRel_paths, DepNorms: TStringList;
+  FromDelim, MainPrefix, ChangedRel, ChangedNorm, DepRel, DepAbs, MatchRel: string;
+  i, d, k: Integer;
+begin
+  Result := TStringList.Create;
+  Result.Sorted := True;              // de-duplicate: the same dependent file
+  Result.Duplicates := dupIgnore;     // is only added once.
+
+  FromDelim := IncludeTrailingPathDelimiter(FromBasePath);
+
+  if Trim(MainSQLRel) = '' then
+    MainPrefix := ''  // empty = consider every changed file
+  else
+    MainPrefix := IncludeTrailingPathDelimiter(
+      StringReplace(Trim(MainSQLRel), '/', PathDelim, [rfReplaceAll]));
+
+  DepList := TStringList.Create;
+  DepRel_paths := TStringList.Create;  // every dependent file, repo-relative
+  DepNorms := TStringList.Create;      // parallel list of normalized names
+  try
+    // 1. Enumerate every file in the dependent folders once, up front.
+    DepList.Delimiter := ';';
+    DepList.StrictDelimiter := True;
+    DepList.DelimitedText := DependentRels;
+
+    for d := 0 to DepList.Count - 1 do
+    begin
+      DepRel := Trim(DepList[d]);
+      if DepRel = '' then
+        Continue;
+      DepRel := StringReplace(DepRel, '/', PathDelim, [rfReplaceAll]);
+      DepAbs := FromDelim + IncludeTrailingPathDelimiter(DepRel);
+      if not DirectoryExists(DepAbs) then
+        Continue;
+
+      DepFiles := FindAllFiles(DepAbs, '', True); // all files, recursively
+      try
+        for k := 0 to DepFiles.Count - 1 do
+        begin
+          MatchRel := DepFiles[k];
+          // Convert the absolute path back to a repo-relative path.
+          if SameText(Copy(MatchRel, 1, Length(FromDelim)), FromDelim) then
+            MatchRel := Copy(MatchRel, Length(FromDelim) + 1, MaxInt);
+          DepRel_paths.Add(MatchRel);
+          DepNorms.Add(NormalizedName(MatchRel));
+        end;
+      finally
+        DepFiles.Free;
+      end;
+    end;
+
+    // 2. For each changed main file, add every dependent file with a matching name.
+    for i := 0 to ChangedFiles.Count - 1 do
+    begin
+      ChangedRel := ChangedFiles[i]; // already normalized to PathDelim
+
+      // Only consider files that live under the main SQL folder.
+      if (MainPrefix <> '') and
+         (not SameText(Copy(ChangedRel, 1, Length(MainPrefix)), MainPrefix)) then
+        Continue;
+
+      ChangedNorm := NormalizedName(ChangedRel);
+      if ChangedNorm = '' then
+        Continue;
+
+      for k := 0 to DepRel_paths.Count - 1 do
+        if DepNorms[k] = ChangedNorm then
+          Result.Add(DepRel_paths[k]);
+    end;
+  finally
+    DepList.Free;
+    DepRel_paths.Free;
+    DepNorms.Free;
+  end;
+end;
+
+{ Returns a file's base name, lower-cased, with a leading run-order prefix removed.
+  A run-order prefix is 1 or 2 digits followed by '_' (e.g. '1_', '06_'). Longer
+  numeric prefixes are left intact so date-stamped migration scripts
+  (e.g. '20200522_...') and migration numbers (e.g. '1464_...') are NOT stripped
+  and therefore only match files with the identical stamp. }
+function TMainFrm.NormalizedName(const AName: string): string;
+var
+  S: string;
+  Digits: Integer;
+begin
+  S := ExtractFileName(AName);
+
+  Digits := 0;
+  while (Digits < Length(S)) and (Digits < 2) and (S[Digits + 1] in ['0'..'9']) do
+    Inc(Digits);
+
+  // Strip only when the digit run is 1-2 long AND immediately followed by '_'.
+  if (Digits > 0) and (Digits < Length(S)) and (S[Digits + 1] = '_') then
+    Delete(S, 1, Digits + 1);
+
+  Result := LowerCase(S);
+end;
+
+{ Replaces the result grid with the given list of files. Both the changed files
+  (Copy Changed Files) and the dependent files (Add Dependent Files) are shown
+  here, one set at a time, so either can be exported. }
+procedure TMainFrm.ShowFilesInGrid(Files: TStringList);
+var
+  i: Integer;
+begin
+  CopiedFilesStringGrid.ColCount := 1;
+  CopiedFilesStringGrid.ColWidths[0] := 300;
+
+  CopiedFilesStringGrid.RowCount := Files.Count + 1; // row 0 is the header
+  CopiedFilesStringGrid.Cells[0, 0] := 'Copied SQL Files';
+  if CopiedFilesStringGrid.RowCount > 1 then
+    CopiedFilesStringGrid.FixedRows := 1;
+
+  for i := 0 to Files.Count - 1 do
+    CopiedFilesStringGrid.Cells[0, i + 1] := Files[i];
 end;
 
 function TMainFrm.FolderHasAnyFiles(const Dir: string): Boolean;
@@ -418,35 +488,4 @@ begin
   end;
 end;
 
-function TMainFrm.ExtractObjectName(const Line, Keyword: string): string;
-var
-  S: string;
-  Parts: TStringArray;
-begin
-  Result := '';
-  S := Trim(Line);
-  // Remove brackets and normalize spacing
-  S := StringReplace(S, '[', '', [rfReplaceAll]);
-  S := StringReplace(S, ']', '', [rfReplaceAll]);
-  S := StringReplace(S, '  ', ' ', [rfReplaceAll]);
-
-  if Pos(LowerCase(Keyword), LowerCase(S)) = 1 then
-  begin
-    // Cut off before 'AS', if present
-    if Pos(' as', LowerCase(S)) > 0 then
-      S := Trim(Copy(S, 1, Pos(' as', LowerCase(S)) - 1));
-
-    // Split by space and get last part (schema.name or just name)
-    Parts := S.Split([' ']);
-    if Length(Parts) > 0 then
-      Result := Parts[High(Parts)];
-
-    // Strip schema if present
-    if Pos('.', Result) > 0 then
-      Result := Copy(Result, Pos('.', Result) + 1, MaxInt);
-  end;
-end;
-
-
 end.
-

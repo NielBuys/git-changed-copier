@@ -1,10 +1,10 @@
 object MainFrm: TMainFrm
   Left = 637
-  Height = 555
+  Height = 640
   Top = 178
   Width = 688
   Caption = 'Copy Changed Git Files'
-  ClientHeight = 555
+  ClientHeight = 640
   ClientWidth = 688
   DesignTimePPI = 120
   LCLVersion = '4.2.0.0'
@@ -12,7 +12,7 @@ object MainFrm: TMainFrm
   OnShow = FormShow
   object PageControl1: TPageControl
     Left = 0
-    Height = 555
+    Height = 640
     Top = 0
     Width = 690
     ActivePage = CopyChangedGitFilesTab
@@ -21,15 +21,30 @@ object MainFrm: TMainFrm
     TabOrder = 0
     object CopyChangedGitFilesTab: TTabSheet
       Caption = 'Copy Changed Git Files'
-      ClientHeight = 522
+      ClientHeight = 607
       ClientWidth = 682
+      object FromBaseFolderEdt: TEdit
+        Left = 224
+        Height = 28
+        Top = 24
+        Width = 435
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 0
+      end
+      object FromBaseFolderLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 32
+        Width = 147
+        Caption = 'From Base Folder Path'
+      end
       object FiltersEdt: TEdit
         Left = 224
         Height = 28
         Top = 64
         Width = 208
-        TabOrder = 0
-        Text = '*.*'
+        TabOrder = 1
+        Text = '*.sql'
       end
       object FiltersLbl: TLabel
         Left = 16
@@ -43,7 +58,7 @@ object MainFrm: TMainFrm
         Height = 28
         Top = 104
         Width = 208
-        TabOrder = 1
+        TabOrder = 2
       end
       object FromTagLbl: TLabel
         Left = 16
@@ -58,7 +73,7 @@ object MainFrm: TMainFrm
         Top = 144
         Width = 435
         Anchors = [akTop, akLeft, akRight]
-        TabOrder = 2
+        TabOrder = 3
       end
       object BaseFolderLbl: TLabel
         Left = 16
@@ -72,7 +87,7 @@ object MainFrm: TMainFrm
         Height = 28
         Top = 184
         Width = 208
-        TabOrder = 3
+        TabOrder = 4
       end
       object ToGitTagLbl: TLabel
         Left = 16
@@ -81,41 +96,77 @@ object MainFrm: TMainFrm
         Width = 66
         Caption = 'To Git Tag'
       end
-      object FromBaseFolderEdt: TEdit
+      object MainSQLFolderEdt: TEdit
         Left = 224
         Height = 28
-        Top = 24
+        Top = 224
         Width = 435
         Anchors = [akTop, akLeft, akRight]
-        TabOrder = 4
+        TabOrder = 5
+        TextHint = 'SQL\WineMS2'
       end
-      object FromBaseFolderLbl: TLabel
+      object MainSQLFolderLbl: TLabel
         Left = 16
         Height = 20
-        Top = 32
-        Width = 147
-        Caption = 'From Base Folder Path'
+        Top = 232
+        Width = 154
+        Caption = 'Main SQL Folder (rel.)'
+      end
+      object DependentSQLFoldersEdt: TEdit
+        Left = 224
+        Height = 28
+        Top = 264
+        Width = 435
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 6
+        TextHint = 'SQL\JuiceMS;SQL\OliveMS;SQL\FarmMS'
+      end
+      object DependentSQLFoldersLbl: TLabel
+        Left = 16
+        Height = 40
+        Top = 264
+        Width = 200
+        Caption = 'Dependent SQL Folders'#13#10'(rel., '';'' separated)'
       end
       object CopyChangedFilesBtn: TButton
         Left = 16
         Height = 31
-        Top = 232
+        Top = 312
         Width = 152
         Caption = 'Copy Changed Files'
-        TabOrder = 5
+        TabOrder = 7
         OnClick = CopyChangedFilesBtnClick
+      end
+      object ExportChangedFilesBtn: TButton
+        Left = 176
+        Height = 31
+        Top = 312
+        Width = 160
+        Caption = 'Export Changed Files'
+        TabOrder = 8
+        OnClick = ExportChangedFilesBtnClick
+      end
+      object AddDependentFilesBtn: TButton
+        Left = 344
+        Height = 31
+        Top = 312
+        Width = 180
+        Caption = 'Add Dependent Files'
+        TabOrder = 9
+        OnClick = AddDependentFilesBtnClick
       end
       object ProgressBar1: TProgressBar
         Left = 16
         Height = 25
-        Top = 272
+        Top = 356
         Width = 643
-        TabOrder = 6
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 10
       end
       object CopiedFilesStringGrid: TStringGrid
         Left = 16
-        Height = 192
-        Top = 303
+        Height = 220
+        Top = 387
         Width = 643
         Anchors = [akTop, akLeft, akRight, akBottom]
         AutoFillColumns = True
@@ -124,28 +175,10 @@ object MainFrm: TMainFrm
         FixedCols = 0
         Options = [goVertLine, goRangeSelect, goColSizing, goSmoothScroll]
         RowCount = 1
-        TabOrder = 7
+        TabOrder = 11
         ColWidths = (
           639
         )
-      end
-      object ExportChangedFilesBtn: TButton
-        Left = 176
-        Height = 31
-        Top = 232
-        Width = 160
-        Caption = 'Export Changed Files'
-        TabOrder = 8
-        OnClick = ExportChangedFilesBtnClick
-      end
-      object testBtn: TButton
-        Left = 360
-        Height = 31
-        Top = 232
-        Width = 152
-        Caption = 'testBtn'
-        TabOrder = 9
-        OnClick = testBtnClick
       end
     end
   end
