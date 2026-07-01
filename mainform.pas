@@ -6,33 +6,40 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ComCtrls,
-  Grids, Process, FileUtil, IniFiles;
+  Grids, Process, FileUtil, IniFiles, StrUtils;
 
 type
 
   { TMainFrm }
 
   TMainFrm = class(TForm)
-    ExportChangedFilesBtn: TButton;
+    BaseFolderLbl: TLabel;
+    testBtn: TButton;
     CopiedFilesStringGrid: TStringGrid;
-    SaveDialog1: TSaveDialog;
-    ToBaseFolderEdt: TEdit;
     CopyChangedFilesBtn: TButton;
-    FromBaseFolderEdt: TEdit;
-    FromBaseFolderLbl: TLabel;
-    ProgressBar1: TProgressBar;
-    ToGitTagLbl: TLabel;
-    ToGitTagEdt: TEdit;
-    FromTagEdt: TEdit;
+    ExportChangedFilesBtn: TButton;
     FiltersEdt: TEdit;
     FiltersLbl: TLabel;
+    FromBaseFolderEdt: TEdit;
+    FromBaseFolderLbl: TLabel;
+    FromTagEdt: TEdit;
     FromTagLbl: TLabel;
-    BaseFolderLbl: TLabel;
+    PageControl1: TPageControl;
+    CopyChangedGitFilesTab: TTabSheet;
+    ProgressBar1: TProgressBar;
+    SaveDialog1: TSaveDialog;
+    ToBaseFolderEdt: TEdit;
+    ToGitTagEdt: TEdit;
+    ToGitTagLbl: TLabel;
     procedure CopyChangedFilesBtnClick(Sender: TObject);
     procedure ExportChangedFilesBtnClick(Sender: TObject);
     procedure FormClose(Sender: TObject; var CloseAction: TCloseAction);
     procedure FormShow(Sender: TObject);
+    procedure testBtnClick(Sender: TObject);
   private
+    procedure CopyReferencedSQLEntities(const ToBasePath, FromBasePath,
+      ReferenceRelPath, SearchRelPath, CopyRelPath: string);
+    function ExtractObjectName(const Line, Keyword: string): string;
     function FolderHasAnyFiles(const Dir: string): Boolean;
     function GetChangedSQLFilesFromTag(
       const FromGitTag, FromBasePath, FileFilter, ToBasePath, ToGitTag: string): TStringList;
@@ -160,6 +167,17 @@ begin
   end;
 end;
 
+procedure TMainFrm.testBtnClick(Sender: TObject);
+begin
+  CopyReferencedSQLEntities(
+    ToBaseFolderEdt.Text,      // e.g., 'D:\MyProject'
+    FromBaseFolderEdt.Text,    // e.g., 'D:\MyRepo'
+    'SQL\WineMS\Views',                 // e.g., 'SQL\WineMS\'
+    'SQL\JuiceMS\Views',      // e.g., 'SQL\JuiceMS\'
+    'SQL\JuiceMS\Views'         // e.g., 'SQL\JuiceMS\'
+  );
+end;
+
 function TMainFrm.GetChangedSQLFilesFromTag(
   const FromGitTag, FromBasePath, FileFilter, ToBasePath, ToGitTag: string): TStringList;
 var
@@ -273,6 +291,103 @@ begin
   end;
 end;
 
+procedure TMainFrm.CopyReferencedSQLEntities(
+  const ToBasePath, FromBasePath,
+  ReferenceRelPath, SearchRelPath, CopyRelPath: string);
+var
+  SQLObjects: TStringList;
+  FileList: TStringList;
+  SR: TSearchRec;
+  RefPath, SearchPath, CopyPath, FilePath, Line, LowerLine, MatchFile, ObjName: string;
+  i, j: Integer;
+begin
+  SQLObjects := TStringList.Create;
+  FileList := TStringList.Create;
+  try
+    RefPath := IncludeTrailingPathDelimiter(ToBasePath) + IncludeTrailingPathDelimiter(ReferenceRelPath);
+    SearchPath := IncludeTrailingPathDelimiter(FromBasePath) + IncludeTrailingPathDelimiter(SearchRelPath);
+    CopyPath := IncludeTrailingPathDelimiter(ToBasePath) + IncludeTrailingPathDelimiter(CopyRelPath);
+
+    // Clear and set up the grid
+    with CopiedFilesStringGrid do
+    begin
+      RowCount := 1;
+      ColCount := 1;
+      Cells[0, 0] := 'SQL Object Name';
+    end;
+
+    ShowMessage('Searching in: ' + RefPath);
+
+    // Step 1: Extract object names from reference path
+    if FindFirst(RefPath + '*.sql', faAnyFile, SR) = 0 then
+    repeat
+      FilePath := RefPath + SR.Name;
+      FileList.LoadFromFile(FilePath);
+      for i := 0 to FileList.Count - 1 do
+      begin
+        Line := Trim(FileList[i]);
+        LowerLine := LowerCase(Line);
+
+        ObjName := '';
+        if (Pos('create view', LowerLine) = 1) or
+           (Pos('alter view', LowerLine) = 1) or
+           (Pos('create or alter view', LowerLine) = 1) then
+          ObjName := ExtractObjectName(Line, 'create or alter view')
+
+        else if (Pos('create function', LowerLine) = 1) or
+                (Pos('alter function', LowerLine) = 1) or
+                (Pos('create or alter function', LowerLine) = 1) then
+          ObjName := ExtractObjectName(Line, 'create or alter function')
+
+        else if (Pos('create procedure', LowerLine) = 1) or
+                (Pos('alter procedure', LowerLine) = 1) or
+                (Pos('create or alter procedure', LowerLine) = 1) or
+                (Pos('create proc', LowerLine) = 1) or
+                (Pos('alter proc', LowerLine) = 1) or
+                (Pos('create or alter proc', LowerLine) = 1) then
+          ObjName := ExtractObjectName(Line, 'create or alter procedure')
+        else
+          Continue;
+
+        if (ObjName <> '') and (SQLObjects.IndexOf(ObjName) = -1) then
+        begin
+          SQLObjects.Add(ObjName);
+          // Add to StringGrid
+          with CopiedFilesStringGrid do
+          begin
+            RowCount := RowCount + 1;
+            Cells[0, RowCount - 1] := ObjName;
+          end;
+        end;
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+
+    // Step 2: Copy matched files from search path
+    if FindFirst(SearchPath + '*.*', faAnyFile, SR) = 0 then
+    repeat
+      MatchFile := SR.Name;
+      for j := 0 to SQLObjects.Count - 1 do
+      begin
+        if Pos(SQLObjects[j], MatchFile) > 0 then
+        begin
+          FilePath := SearchPath + MatchFile;
+          ForceDirectories(CopyPath);
+          CopyFile(PChar(FilePath), PChar(CopyPath + MatchFile));
+          Break;
+        end;
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+
+    ShowMessage('Referenced SQL files copied and listed successfully.');
+
+  finally
+    SQLObjects.Free;
+    FileList.Free;
+  end;
+end;
+
 function TMainFrm.FolderHasAnyFiles(const Dir: string): Boolean;
 var
   SR: TSearchRec;
@@ -300,6 +415,35 @@ begin
       end;
     until FindNext(SR) <> 0;
     FindClose(SR);
+  end;
+end;
+
+function TMainFrm.ExtractObjectName(const Line, Keyword: string): string;
+var
+  S: string;
+  Parts: TStringArray;
+begin
+  Result := '';
+  S := Trim(Line);
+  // Remove brackets and normalize spacing
+  S := StringReplace(S, '[', '', [rfReplaceAll]);
+  S := StringReplace(S, ']', '', [rfReplaceAll]);
+  S := StringReplace(S, '  ', ' ', [rfReplaceAll]);
+
+  if Pos(LowerCase(Keyword), LowerCase(S)) = 1 then
+  begin
+    // Cut off before 'AS', if present
+    if Pos(' as', LowerCase(S)) > 0 then
+      S := Trim(Copy(S, 1, Pos(' as', LowerCase(S)) - 1));
+
+    // Split by space and get last part (schema.name or just name)
+    Parts := S.Split([' ']);
+    if Length(Parts) > 0 then
+      Result := Parts[High(Parts)];
+
+    // Strip schema if present
+    if Pos('.', Result) > 0 then
+      Result := Copy(Result, Pos('.', Result) + 1, MaxInt);
   end;
 end;
 

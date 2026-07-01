@@ -1,133 +1,156 @@
 object MainFrm: TMainFrm
-  Left = 440
-  Height = 533
-  Top = 199
-  Width = 690
+  Left = 637
+  Height = 555
+  Top = 178
+  Width = 688
   Caption = 'Copy Changed Git Files'
-  ClientHeight = 533
-  ClientWidth = 690
+  ClientHeight = 555
+  ClientWidth = 688
   DesignTimePPI = 120
+  LCLVersion = '4.2.0.0'
   OnClose = FormClose
   OnShow = FormShow
-  LCLVersion = '3.8.0.0'
-  object FiltersEdt: TEdit
-    Left = 224
-    Height = 28
-    Top = 64
-    Width = 208
-    TabOrder = 1
-    Text = '*.*'
-  end
-  object FiltersLbl: TLabel
-    Left = 64
-    Height = 20
-    Top = 72
-    Width = 39
-    Caption = 'Filters'
-  end
-  object FromTagEdt: TEdit
-    Left = 224
-    Height = 28
-    Top = 104
-    Width = 208
-    TabOrder = 2
-  end
-  object FromTagLbl: TLabel
-    Left = 64
-    Height = 20
-    Top = 112
-    Width = 84
-    Caption = 'From Git Tag'
-  end
-  object ToBaseFolderEdt: TEdit
-    Left = 224
-    Height = 28
-    Top = 144
-    Width = 400
-    Anchors = [akTop, akLeft, akRight]
-    TabOrder = 3
-  end
-  object BaseFolderLbl: TLabel
-    Left = 64
-    Height = 20
-    Top = 152
-    Width = 129
-    Caption = 'To Base Folder Path'
-  end
-  object ToGitTagEdt: TEdit
-    Left = 224
-    Height = 28
-    Top = 184
-    Width = 208
-    TabOrder = 4
-  end
-  object ToGitTagLbl: TLabel
-    Left = 64
-    Height = 20
-    Top = 192
-    Width = 66
-    Caption = 'To Git Tag'
-  end
-  object FromBaseFolderEdt: TEdit
-    Left = 224
-    Height = 28
-    Top = 24
-    Width = 400
-    Anchors = [akTop, akLeft, akRight]
-    TabOrder = 0
-  end
-  object FromBaseFolderLbl: TLabel
-    Left = 64
-    Height = 20
-    Top = 32
-    Width = 147
-    Caption = 'From Base Folder Path'
-  end
-  object CopyChangedFilesBtn: TButton
-    Left = 224
-    Height = 31
-    Top = 224
-    Width = 152
-    Caption = 'Copy Changed Files'
-    TabOrder = 5
-    OnClick = CopyChangedFilesBtnClick
-  end
-  object ProgressBar1: TProgressBar
-    Left = 64
-    Height = 25
-    Top = 272
-    Width = 560
-    Anchors = [akTop, akLeft, akRight]
-    TabOrder = 6
-  end
-  object CopiedFilesStringGrid: TStringGrid
-    Left = 64
-    Height = 192
-    Top = 312
-    Width = 562
+  object PageControl1: TPageControl
+    Left = 0
+    Height = 555
+    Top = 0
+    Width = 690
+    ActivePage = CopyChangedGitFilesTab
     Anchors = [akTop, akLeft, akRight, akBottom]
-    AutoFillColumns = True
-    ColCount = 1
-    DefaultColWidth = 300
-    FixedCols = 0
-    Options = [goVertLine, goRangeSelect, goColSizing, goSmoothScroll]
-    RowCount = 1
-    TabOrder = 7
-    ColWidths = (
-      558
-    )
-  end
-  object ExportChangedFilesBtn: TButton
-    Left = 392
-    Height = 31
-    Top = 224
-    Width = 160
-    Caption = 'Export Changed Files'
-    TabOrder = 8
-    OnClick = ExportChangedFilesBtnClick
+    TabIndex = 0
+    TabOrder = 0
+    object CopyChangedGitFilesTab: TTabSheet
+      Caption = 'Copy Changed Git Files'
+      ClientHeight = 522
+      ClientWidth = 682
+      object FiltersEdt: TEdit
+        Left = 224
+        Height = 28
+        Top = 64
+        Width = 208
+        TabOrder = 0
+        Text = '*.*'
+      end
+      object FiltersLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 72
+        Width = 39
+        Caption = 'Filters'
+      end
+      object FromTagEdt: TEdit
+        Left = 224
+        Height = 28
+        Top = 104
+        Width = 208
+        TabOrder = 1
+      end
+      object FromTagLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 112
+        Width = 84
+        Caption = 'From Git Tag'
+      end
+      object ToBaseFolderEdt: TEdit
+        Left = 224
+        Height = 28
+        Top = 144
+        Width = 435
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 2
+      end
+      object BaseFolderLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 152
+        Width = 129
+        Caption = 'To Base Folder Path'
+      end
+      object ToGitTagEdt: TEdit
+        Left = 224
+        Height = 28
+        Top = 184
+        Width = 208
+        TabOrder = 3
+      end
+      object ToGitTagLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 192
+        Width = 66
+        Caption = 'To Git Tag'
+      end
+      object FromBaseFolderEdt: TEdit
+        Left = 224
+        Height = 28
+        Top = 24
+        Width = 435
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 4
+      end
+      object FromBaseFolderLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 32
+        Width = 147
+        Caption = 'From Base Folder Path'
+      end
+      object CopyChangedFilesBtn: TButton
+        Left = 16
+        Height = 31
+        Top = 232
+        Width = 152
+        Caption = 'Copy Changed Files'
+        TabOrder = 5
+        OnClick = CopyChangedFilesBtnClick
+      end
+      object ProgressBar1: TProgressBar
+        Left = 16
+        Height = 25
+        Top = 272
+        Width = 643
+        TabOrder = 6
+      end
+      object CopiedFilesStringGrid: TStringGrid
+        Left = 16
+        Height = 192
+        Top = 303
+        Width = 643
+        Anchors = [akTop, akLeft, akRight, akBottom]
+        AutoFillColumns = True
+        ColCount = 1
+        DefaultColWidth = 300
+        FixedCols = 0
+        Options = [goVertLine, goRangeSelect, goColSizing, goSmoothScroll]
+        RowCount = 1
+        TabOrder = 7
+        ColWidths = (
+          639
+        )
+      end
+      object ExportChangedFilesBtn: TButton
+        Left = 176
+        Height = 31
+        Top = 232
+        Width = 160
+        Caption = 'Export Changed Files'
+        TabOrder = 8
+        OnClick = ExportChangedFilesBtnClick
+      end
+      object testBtn: TButton
+        Left = 360
+        Height = 31
+        Top = 232
+        Width = 152
+        Caption = 'testBtn'
+        TabOrder = 9
+        OnClick = testBtnClick
+      end
+    end
   end
   object SaveDialog1: TSaveDialog
-    Left = 544
-    Top = 168
+    Left = 578
+    Top = 202
   end
 end
