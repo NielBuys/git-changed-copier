@@ -206,6 +206,7 @@ object MainFrm: TMainFrm
         Top = 42
         Width = 479
         Anchors = [akTop, akLeft, akRight]
+        Color = clBtnFace
         ReadOnly = True
         TabStop = False
         TabOrder = 0
@@ -222,6 +223,7 @@ object MainFrm: TMainFrm
         Height = 28
         Top = 78
         Width = 200
+        Color = clBtnFace
         ReadOnly = True
         TabStop = False
         TabOrder = 1
@@ -238,6 +240,7 @@ object MainFrm: TMainFrm
         Height = 28
         Top = 114
         Width = 200
+        Color = clBtnFace
         ReadOnly = True
         TabStop = False
         TabOrder = 2
@@ -255,6 +258,7 @@ object MainFrm: TMainFrm
         Top = 150
         Width = 479
         Anchors = [akTop, akLeft, akRight]
+        Color = clBtnFace
         ReadOnly = True
         TabStop = False
         TabOrder = 3
@@ -305,6 +309,7 @@ object MainFrm: TMainFrm
         Top = 262
         Width = 479
         Anchors = [akTop, akLeft, akRight]
+        Color = clBtnFace
         ReadOnly = True
         TabStop = False
         TabOrder = 6
@@ -428,33 +433,147 @@ object MainFrm: TMainFrm
         TabOrder = 5
         TextHint = 'C:\deploy\ChangedSQLFiles\v1.1.0\Single.sql'
       end
-      object RunBtn: TButton
-        Left = 140
-        Height = 31
+      object LoginTimeoutLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 188
+        Width = 108
+        Caption = 'Login timeout (s)'
+      end
+      object LoginTimeoutEdt: TEdit
+        Left = 126
+        Height = 28
         Top = 184
-        Width = 200
+        Width = 44
+        Hint = 'sqlcmd login timeout in seconds (-l): a failed connect gives up after this'
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 6
+        Text = '15'
+      end
+      object QueryTimeoutLbl: TLabel
+        Left = 178
+        Height = 20
+        Top = 188
+        Width = 112
+        Caption = 'Query timeout (s)'
+      end
+      object QueryTimeoutEdt: TEdit
+        Left = 290
+        Height = 28
+        Top = 184
+        Width = 52
+        Hint = 'sqlcmd query timeout in seconds (-t): kills a stalled/very long query after this. 0 = wait forever'
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 7
+        Text = '300'
+      end
+      object RetriesLbl: TLabel
+        Left = 350
+        Height = 20
+        Top = 188
+        Width = 46
+        Caption = 'Retries'
+      end
+      object RetriesEdt: TEdit
+        Left = 398
+        Height = 28
+        Top = 184
+        Width = 38
+        Hint = 'Extra attempts when a database fails with a connection problem (not for SQL errors)'
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 8
+        Text = '1'
+      end
+      object RetryWaitLbl: TLabel
+        Left = 444
+        Height = 20
+        Top = 188
+        Width = 78
+        Caption = 'Retry wait (s)'
+      end
+      object RetryWaitEdt: TEdit
+        Left = 524
+        Height = 28
+        Top = 184
+        Width = 40
+        Hint = 'Seconds to wait before each retry (lets the VPN reconnect)'
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 9
+        Text = '15'
+      end
+      object OnlyFailedChk: TCheckBox
+        Left = 572
+        Height = 24
+        Top = 188
+        Width = 108
+        Caption = 'Failed only'
+        Hint = 'Run only the databases in the failed list (from the last run or a loaded CSV)'
+        ParentShowHint = False
+        ShowHint = True
+        TabOrder = 10
+      end
+      object RunBtn: TButton
+        Left = 16
+        Height = 31
+        Top = 224
+        Width = 190
         Caption = 'Run on All Databases'
         OnClick = RunBtnClick
-        TabOrder = 6
+        TabOrder = 11
+      end
+      object CancelBtn: TButton
+        Left = 212
+        Height = 31
+        Top = 224
+        Width = 90
+        Caption = 'Cancel'
+        Enabled = False
+        OnClick = CancelBtnClick
+        TabOrder = 12
+      end
+      object ExportRunLogBtn: TButton
+        Left = 308
+        Height = 31
+        Top = 224
+        Width = 130
+        Caption = 'Export Run Log'
+        OnClick = ExportRunLogBtnClick
+        TabOrder = 13
+      end
+      object LoadFailedBtn: TButton
+        Left = 444
+        Height = 31
+        Top = 224
+        Width = 150
+        Caption = 'Load Failed From CSV'
+        Hint = 'Auto-detects <SQL File>_RunResults.csv and loads its failed databases so you can re-run them'
+        ParentShowHint = False
+        ShowHint = True
+        OnClick = LoadFailedBtnClick
+        TabOrder = 14
       end
       object RunProgressBar: TProgressBar
         Left = 16
         Height = 25
-        Top = 228
+        Top = 264
         Width = 643
         Anchors = [akTop, akLeft, akRight]
-        TabOrder = 7
+        TabOrder = 15
       end
       object RunResultsGrid: TStringGrid
         Left = 16
         Height = 150
-        Top = 260
+        Top = 296
         Width = 643
         Anchors = [akTop, akLeft, akRight]
         ColCount = 3
         FixedCols = 0
         RowCount = 1
-        TabOrder = 8
+        TabOrder = 16
         ColWidths = (
           340
           100
@@ -463,13 +582,13 @@ object MainFrm: TMainFrm
       end
       object RunLogMemo: TMemo
         Left = 16
-        Height = 175
-        Top = 420
+        Height = 145
+        Top = 456
         Width = 643
         Anchors = [akTop, akLeft, akRight, akBottom]
         ReadOnly = True
         ScrollBars = ssAutoBoth
-        TabOrder = 9
+        TabOrder = 17
         WordWrap = False
       end
     end
@@ -477,5 +596,9 @@ object MainFrm: TMainFrm
   object SaveDialog1: TSaveDialog
     Left = 578
     Top = 202
+  end
+  object OpenDialog1: TOpenDialog
+    Left = 578
+    Top = 258
   end
 end

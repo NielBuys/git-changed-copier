@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ComCtrls,
-  Grids, Process, FileUtil, IniFiles, StrUtils, fpjson, jsonparser;
+  Grids, Process, FileUtil, IniFiles, StrUtils, fpjson, jsonparser, LConvEncoding;
 
 type
 
@@ -17,17 +17,29 @@ type
     BaseFolderLbl: TLabel;
     CopiedFilesStringGrid: TStringGrid;
     CopyChangedFilesBtn: TButton;
+    CancelBtn: TButton;
     DependentSQLFoldersEdt: TEdit;
     DependentSQLFoldersLbl: TLabel;
     EnvFileEdt: TEdit;
     EnvFileLbl: TLabel;
     ExportChangedFilesBtn: TButton;
+    ExportRunLogBtn: TButton;
+    LoginTimeoutEdt: TEdit;
+    LoginTimeoutLbl: TLabel;
+    QueryTimeoutEdt: TEdit;
+    QueryTimeoutLbl: TLabel;
+    RetriesEdt: TEdit;
+    RetriesLbl: TLabel;
+    RetryWaitEdt: TEdit;
+    RetryWaitLbl: TLabel;
     FiltersEdt: TEdit;
     FiltersLbl: TLabel;
     FromBaseFolderEdt: TEdit;
     FromBaseFolderLbl: TLabel;
     FromTagEdt: TEdit;
     FromTagLbl: TLabel;
+    LoadFailedBtn: TButton;
+    OpenDialog1: TOpenDialog;
     GenerateBtn: TButton;
     GenerateSingleFileTab: TTabSheet;
     GenFromTagEdt: TEdit;
@@ -45,6 +57,7 @@ type
     GenToTagLbl: TLabel;
     MainSQLFolderEdt: TEdit;
     MainSQLFolderLbl: TLabel;
+    OnlyFailedChk: TCheckBox;
     PageControl1: TPageControl;
     CopyChangedGitFilesTab: TTabSheet;
     PasswordEdt: TEdit;
@@ -80,18 +93,29 @@ type
     procedure WindowsAuthChkChange(Sender: TObject);
     procedure PageControl1Change(Sender: TObject);
     procedure EnvFileEdtChange(Sender: TObject);
+    procedure ExportRunLogBtnClick(Sender: TObject);
+    procedure LoadFailedBtnClick(Sender: TObject);
+    procedure CancelBtnClick(Sender: TObject);
   private
+    FLastFailedDbs: TStringList; // databases that failed on the previous run (this session)
+    FRunning: Boolean;           // a run is in progress
+    FCancelRequested: Boolean;   // user asked to stop the run
+    function LooksLikeConnectivityFailure(const AOutput: string): Boolean;
+    procedure InterruptibleSleep(ASeconds: Integer);
     function FolderHasAnyFiles(const Dir: string): Boolean;
     function SanitizeFileName(const AName: string): string;
     function ReleaseDestFolder: string;
     function SingleFileOutputPath: string;
     procedure RefreshGenerateTabInfo;
+    procedure WriteLinesFile(const APath, AHeader: string; ALines: TStrings);
+    function IndexedName(const APath: string; N: Integer): string;
     function ReadJSONStringField(const AFileName, AField: string): string;
     procedure StreamWriteText(AStream: TStream; const AText: string);
     procedure StreamAppendFile(AStream: TStream; const AFileName: string);
     procedure PopulateProcEnv(AEnv: TStrings; const AExtraName, AExtraValue: string);
     function RunSqlcmd(const AServer, ADatabase, AUser, APassword, ASqlFile: string;
-      AWindowsAuth: Boolean; out AOutput: string): Integer;
+      AWindowsAuth: Boolean; ALoginTimeout, AQueryTimeout: Integer;
+      out AOutput: string): Integer;
     function CountSqlErrors(const AOutput: string): Integer;
     function GetChangedFilesList(
       const FromGitTag, FromBasePath, FileFilter: string): TStringList;
@@ -136,6 +160,10 @@ begin
     Copied := CopyFilesToDest(ChangedFiles, FromBaseFolderEdt.Text, DestDir);
     try
       ShowFilesInGrid(Copied);
+      // Save the change-set list into the release folder for the audit trail.
+      WriteLinesFile(IncludeTrailingPathDelimiter(DestDir) +
+        SanitizeFileName(Trim(ToGitTagEdt.Text)) + '_ChangedFiles.csv',
+        'Changed SQL Files', Copied);
     finally
       Copied.Free;
     end;
@@ -175,6 +203,10 @@ begin
       Copied := CopyFilesToDest(Deps, FromBaseFolderEdt.Text, DestDir);
       try
         ShowFilesInGrid(Copied);
+        // Save the dependent-file list into the release folder for the audit trail.
+        WriteLinesFile(IncludeTrailingPathDelimiter(DestDir) +
+          SanitizeFileName(Trim(ToGitTagEdt.Text)) + '_DependentFiles.csv',
+          'Dependent SQL Files', Copied);
         ShowMessage(Format(
           'Added %d dependent file(s) matching %d changed main file(s).',
           [Copied.Count, ChangedFiles.Count]));
@@ -251,9 +283,14 @@ begin
     Ini.WriteBool('Settings', 'WindowsAuth', WindowsAuthChk.Checked);
     Ini.WriteString('Settings', 'RunEnvFile', RunEnvFileEdt.Text);
     Ini.WriteString('Settings', 'RunSqlFile', RunSqlFileEdt.Text);
+    Ini.WriteString('Settings', 'LoginTimeout', LoginTimeoutEdt.Text);
+    Ini.WriteString('Settings', 'QueryTimeout', QueryTimeoutEdt.Text);
+    Ini.WriteString('Settings', 'Retries', RetriesEdt.Text);
+    Ini.WriteString('Settings', 'RetryWait', RetryWaitEdt.Text);
   finally
     Ini.Free;
   end;
+  FLastFailedDbs.Free; // TObject.Free is safe when nil
 end;
 
 procedure TMainFrm.FormShow(Sender: TObject);
@@ -281,6 +318,10 @@ begin
       WindowsAuthChk.Checked := Ini.ReadBool('Settings', 'WindowsAuth', False);
       RunEnvFileEdt.Text := Ini.ReadString('Settings', 'RunEnvFile', '');
       RunSqlFileEdt.Text := Ini.ReadString('Settings', 'RunSqlFile', '');
+      LoginTimeoutEdt.Text := Ini.ReadString('Settings', 'LoginTimeout', '15');
+      QueryTimeoutEdt.Text := Ini.ReadString('Settings', 'QueryTimeout', '300');
+      RetriesEdt.Text := Ini.ReadString('Settings', 'Retries', '1');
+      RetryWaitEdt.Text := Ini.ReadString('Settings', 'RetryWait', '15');
     finally
       Ini.Free;
     end;
@@ -593,18 +634,35 @@ begin
     AStream.WriteBuffer(AText[1], Length(AText));
 end;
 
-{ Appends the raw bytes of a file to a stream (preserves original encoding). }
+{ Appends a source file to the stream, converting it to UTF-8 first. Source files
+  are a mix of ASCII, UTF-8 and UTF-16 LE (some views carry a UTF-16 BOM). Left as
+  raw bytes the combined file would mix encodings and sqlcmd (-f 65001) would fail
+  with "Incorrect syntax near '?'". Normalising every file to UTF-8 gives the output
+  one consistent encoding. }
 procedure TMainFrm.StreamAppendFile(AStream: TStream; const AFileName: string);
 var
   FS: TFileStream;
+  Raw, Utf8, Enc: string;
+  Encoded: Boolean;
 begin
   FS := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
   try
+    SetLength(Raw, FS.Size);
     if FS.Size > 0 then
-      AStream.CopyFrom(FS, FS.Size);
+      FS.ReadBuffer(Raw[1], FS.Size);
   finally
     FS.Free;
   end;
+  if Raw = '' then
+    Exit;
+
+  Enc := GuessEncoding(Raw);                       // detects UTF-16/UTF-8 BOMs, ANSI
+  Utf8 := ConvertEncodingToUTF8(Raw, Enc, Encoded);
+  // Strip a leading UTF-8 BOM so it does not land mid-file.
+  if (Length(Utf8) >= 3) and (Utf8[1] = #$EF) and (Utf8[2] = #$BB) and (Utf8[3] = #$BF) then
+    Delete(Utf8, 1, 3);
+
+  StreamWriteText(AStream, Utf8);
 end;
 
 { Replaces characters that are invalid in a Windows file name with '_'. }
@@ -618,6 +676,154 @@ begin
   for i := 1 to Length(Result) do
     if Pos(Result[i], Invalid) > 0 then
       Result[i] := '_';
+end;
+
+{ Writes an optional header line followed by the given lines to APath. }
+procedure TMainFrm.WriteLinesFile(const APath, AHeader: string; ALines: TStrings);
+var
+  SL: TStringList;
+  i: Integer;
+begin
+  SL := TStringList.Create;
+  try
+    if AHeader <> '' then
+      SL.Add(AHeader);
+    for i := 0 to ALines.Count - 1 do
+      SL.Add(ALines[i]);
+    ForceDirectories(ExtractFilePath(APath));
+    SL.SaveToFile(APath);
+  finally
+    SL.Free;
+  end;
+end;
+
+{ Builds a path with "_N" inserted before the extension, e.g.
+  ...\foo_RunResults.csv + 2 -> ...\foo_RunResults_2.csv }
+function TMainFrm.IndexedName(const APath: string; N: Integer): string;
+begin
+  Result := IncludeTrailingPathDelimiter(ExtractFilePath(APath)) +
+    ChangeFileExt(ExtractFileName(APath), '') + '_' + IntToStr(N) + ExtractFileExt(APath);
+end;
+
+{ Exports the current run log to a file chosen by the user (defaults to the release
+  folder next to the SQL file). }
+procedure TMainFrm.ExportRunLogBtnClick(Sender: TObject);
+begin
+  if RunLogMemo.Lines.Count = 0 then
+  begin
+    ShowMessage('There is no run output to export yet.');
+    Exit;
+  end;
+  SaveDialog1.Title := 'Export Run Log';
+  SaveDialog1.DefaultExt := 'txt';
+  SaveDialog1.Filter := 'Text Files (*.txt)|*.txt|All Files (*.*)|*.*';
+  if Trim(RunSqlFileEdt.Text) <> '' then
+  begin
+    SaveDialog1.InitialDir := ExtractFilePath(RunSqlFileEdt.Text);
+    SaveDialog1.FileName :=
+      ChangeFileExt(ExtractFileName(RunSqlFileEdt.Text), '') + '_RunLog.txt';
+  end
+  else
+    SaveDialog1.FileName := 'RunLog.txt';
+
+  if SaveDialog1.Execute then
+  begin
+    RunLogMemo.Lines.SaveToFile(SaveDialog1.FileName);
+    ShowMessage('Run log saved to:' + sLineBreak + SaveDialog1.FileName);
+  end;
+end;
+
+{ Loads the failed (ERROR) databases from a run's _RunResults.csv into the failed list
+  and ticks "Re-run failed only", so a failed set can be re-run in a new session (the
+  in-memory list does not survive an app restart). The results file is detected
+  automatically next to the SQL File; a file dialog is only shown as a fallback. }
+procedure TMainFrm.LoadFailedBtnClick(Sender: TObject);
+var
+  CsvLines: TStringList;
+  i, p1, p2: Integer;
+  L, Rest, Db, Src: string;
+begin
+  Src := '';
+  // Detect the results file next to the SQL File: <sqlfile-name>_RunResults.csv
+  if Trim(RunSqlFileEdt.Text) <> '' then
+  begin
+    Src := IncludeTrailingPathDelimiter(ExtractFilePath(RunSqlFileEdt.Text)) +
+      ChangeFileExt(ExtractFileName(RunSqlFileEdt.Text), '') + '_RunResults.csv';
+    if not FileExists(Src) then
+      Src := '';
+  end;
+
+  // Fall back to asking only if it could not be detected.
+  if Src = '' then
+  begin
+    OpenDialog1.Title := 'Load Failed Databases From Run Results CSV';
+    OpenDialog1.Filter :=
+      'Run Results (*_RunResults.csv)|*_RunResults.csv|CSV Files (*.csv)|*.csv|All Files (*.*)|*.*';
+    if Trim(RunSqlFileEdt.Text) <> '' then
+      OpenDialog1.InitialDir := ExtractFilePath(RunSqlFileEdt.Text);
+    if not OpenDialog1.Execute then
+      Exit;
+    Src := OpenDialog1.FileName;
+  end;
+
+  if FLastFailedDbs = nil then
+    FLastFailedDbs := TStringList.Create;
+  FLastFailedDbs.Clear;
+
+  CsvLines := TStringList.Create;
+  try
+    CsvLines.LoadFromFile(Src);
+    // Rows look like:  "DbName","ERROR","6"   (header on the first line is skipped)
+    for i := 1 to CsvLines.Count - 1 do
+    begin
+      L := Trim(CsvLines[i]);
+      if L = '' then
+        Continue;
+      if Pos('"ERROR"', L) = 0 then
+        Continue; // only failed rows
+      // database name is the first quoted field
+      p1 := Pos('"', L);
+      if p1 = 0 then
+        Continue;
+      Rest := Copy(L, p1 + 1, MaxInt);
+      p2 := Pos('"', Rest);
+      if p2 <= 1 then
+        Continue;
+      Db := Trim(Copy(Rest, 1, p2 - 1));
+      if Db <> '' then
+        FLastFailedDbs.Add(Db);
+    end;
+  finally
+    CsvLines.Free;
+  end;
+
+  if FLastFailedDbs.Count = 0 then
+  begin
+    ShowMessage('No failed (ERROR) rows found in:' + sLineBreak + Src);
+    Exit;
+  end;
+
+  // Show the loaded set and arm the re-run tick.
+  RunResultsGrid.ColCount := 3;
+  RunResultsGrid.RowCount := FLastFailedDbs.Count + 1;
+  RunResultsGrid.Cells[0, 0] := 'Database';
+  RunResultsGrid.Cells[1, 0] := 'Result';
+  RunResultsGrid.Cells[2, 0] := 'Errors';
+  RunResultsGrid.FixedRows := 1;
+  for i := 0 to FLastFailedDbs.Count - 1 do
+  begin
+    RunResultsGrid.Cells[0, i + 1] := FLastFailedDbs[i];
+    RunResultsGrid.Cells[1, i + 1] := 'loaded';
+    RunResultsGrid.Cells[2, i + 1] := '';
+  end;
+  OnlyFailedChk.Checked := True;
+
+  RunLogMemo.Lines.Add('Loaded ' + IntToStr(FLastFailedDbs.Count) +
+    ' failed database(s) from ' + ExtractFileName(Src) +
+    '. "Re-run failed only" is ticked - click "Run on All Databases".');
+  ShowMessage(Format('Loaded %d failed database(s).' + sLineBreak +
+    '"Re-run failed only" is now ticked - click "Run on All Databases" to run just those.',
+    [FLastFailedDbs.Count]));
 end;
 
 { The folder that "Copy Changed Files" wrote the change set into:
@@ -907,7 +1113,8 @@ end;
   SQLCMDPASSWORD environment variable so it never appears on the command line.
   Returns the process exit code, or -2 if sqlcmd could not be launched. }
 function TMainFrm.RunSqlcmd(const AServer, ADatabase, AUser, APassword, ASqlFile: string;
-  AWindowsAuth: Boolean; out AOutput: string): Integer;
+  AWindowsAuth: Boolean; ALoginTimeout, AQueryTimeout: Integer;
+  out AOutput: string): Integer;
 var
   Proc: TProcess;
   OutStream: TMemoryStream;
@@ -933,6 +1140,14 @@ begin
     end;
     Proc.Parameters.Add('-i'); Proc.Parameters.Add(ASqlFile);
     Proc.Parameters.Add('-f'); Proc.Parameters.Add('65001'); // UTF-8 in/out
+    if ALoginTimeout >= 0 then
+    begin
+      Proc.Parameters.Add('-l'); Proc.Parameters.Add(IntToStr(ALoginTimeout));
+    end;
+    if AQueryTimeout >= 0 then
+    begin
+      Proc.Parameters.Add('-t'); Proc.Parameters.Add(IntToStr(AQueryTimeout));
+    end;
     // No -b: sqlcmd continues past errors so every problem is reported in one run.
 
     if AWindowsAuth then
@@ -958,7 +1173,15 @@ begin
         OutStream.Write(Buffer, BytesRead);
       end
       else
+      begin
+        Application.ProcessMessages; // keep UI alive and let Cancel be clicked
+        if FCancelRequested then
+        begin
+          Proc.Terminate(1); // stop this database's sqlcmd
+          Break;
+        end;
         Sleep(10);
+      end;
     end;
     while Proc.Output.NumBytesAvailable > 0 do
     begin
@@ -1018,6 +1241,50 @@ begin
   end;
 end;
 
+{ Heuristic: does the sqlcmd output look like a connection/network failure (worth
+  retrying) rather than a plain T-SQL error (which a retry would not fix)? }
+function TMainFrm.LooksLikeConnectivityFailure(const AOutput: string): Boolean;
+const
+  Markers: array[0..11] of string = (
+    'communication link failure', 'login timeout', 'timeout expired',
+    'network-related', 'named pipes provider', 'tcp provider',
+    'server was not found', 'unable to complete login', 'transport-level error',
+    'sqlcmd: error', 'shared memory provider', 'no connection could be made');
+var
+  LowOut: string;
+  i: Integer;
+begin
+  Result := False;
+  LowOut := LowerCase(AOutput);
+  for i := 0 to High(Markers) do
+    if Pos(Markers[i], LowOut) > 0 then
+      Exit(True);
+end;
+
+{ Sleeps up to ASeconds while keeping the UI responsive and honouring Cancel. }
+procedure TMainFrm.InterruptibleSleep(ASeconds: Integer);
+var
+  i: Integer;
+begin
+  for i := 1 to ASeconds * 20 do // 20 x 50ms = 1s
+  begin
+    if FCancelRequested then
+      Exit;
+    Application.ProcessMessages;
+    Sleep(50);
+  end;
+end;
+
+{ Requests cancellation of an in-progress run. }
+procedure TMainFrm.CancelBtnClick(Sender: TObject);
+begin
+  if FRunning then
+  begin
+    FCancelRequested := True;
+    RunLogMemo.Lines.Add('*** Cancel requested - stopping after the current database... ***');
+  end;
+end;
+
 { Runs the chosen SQL file against every database listed in the environment file's
   "Databases" field. Each database's result (OK / error count) is shown in the grid,
   and full output for any failed database is written to the log so it can be fixed
@@ -1025,11 +1292,14 @@ end;
 procedure TMainFrm.RunBtnClick(Sender: TObject);
 var
   Server, User, Password, SqlFile, EnvFile, DatabasesCsv: string;
-  Databases: TStringList;
-  WinAuth: Boolean;
-  i, ExitCode, Errors, FailCount: Integer;
-  Db, Output, Status: string;
+  Databases, ResList: TStringList;
+  WinAuth, DidBackup, ConnFail, RunOk: Boolean;
+  i, ExitCode, Errors, FailCount, BkIdx: Integer;
+  LoginTO, QueryTO, Retries, RetryWait, Attempt, Processed: Integer;
+  Db, Output, Status, LogBase, LogPath, ResPath: string;
 begin
+  if FRunning then
+    Exit; // a run is already in progress
   Server := Trim(ServerEdt.Text);
   User := Trim(UserEdt.Text);
   Password := PasswordEdt.Text;
@@ -1052,24 +1322,51 @@ begin
     ShowMessage('Please enter a valid SQL File to run.');
     Exit;
   end;
-  if (EnvFile = '') or not FileExists(EnvFile) then
-  begin
-    ShowMessage('Please enter a valid Environment File (its "Databases" list is used).');
-    Exit;
-  end;
 
-  DatabasesCsv := ReadJSONStringField(EnvFile, 'Databases');
-  if Trim(DatabasesCsv) = '' then
-  begin
-    ShowMessage('The environment file has no "Databases" list: ' + EnvFile);
-    Exit;
-  end;
+  LoginTO := StrToIntDef(Trim(LoginTimeoutEdt.Text), 15);
+  QueryTO := StrToIntDef(Trim(QueryTimeoutEdt.Text), 300);
+  Retries := StrToIntDef(Trim(RetriesEdt.Text), 0);
+  if Retries < 0 then Retries := 0;
+  RetryWait := StrToIntDef(Trim(RetryWaitEdt.Text), 15);
+  if RetryWait < 0 then RetryWait := 0;
+
+  FRunning := True;
+  FCancelRequested := False;
+  RunBtn.Enabled := False;
+  LoadFailedBtn.Enabled := False;
+  ExportRunLogBtn.Enabled := False;
+  CancelBtn.Enabled := True;
 
   Databases := TStringList.Create;
   try
-    Databases.Delimiter := ',';
-    Databases.StrictDelimiter := True;
-    Databases.DelimitedText := DatabasesCsv;
+    if OnlyFailedChk.Checked then
+    begin
+      // Re-run only the databases that failed on the previous run this session.
+      if (FLastFailedDbs = nil) or (FLastFailedDbs.Count = 0) then
+      begin
+        ShowMessage('No failed databases are recorded yet in this session.' + sLineBreak +
+          'Uncheck "Re-run failed only" and run all databases first.');
+        Exit;
+      end;
+      Databases.Assign(FLastFailedDbs);
+    end
+    else
+    begin
+      if (EnvFile = '') or not FileExists(EnvFile) then
+      begin
+        ShowMessage('Please enter a valid Environment File (its "Databases" list is used).');
+        Exit;
+      end;
+      DatabasesCsv := ReadJSONStringField(EnvFile, 'Databases');
+      if Trim(DatabasesCsv) = '' then
+      begin
+        ShowMessage('The environment file has no "Databases" list: ' + EnvFile);
+        Exit;
+      end;
+      Databases.Delimiter := ',';
+      Databases.StrictDelimiter := True;
+      Databases.DelimitedText := DatabasesCsv;
+    end;
 
     // Set up results grid
     RunResultsGrid.ColCount := 3;
@@ -1082,6 +1379,9 @@ begin
     RunLogMemo.Lines.Add('Running "' + SqlFile + '"');
     RunLogMemo.Lines.Add('Server: ' + Server + '   Auth: ' +
       IfThen(WinAuth, 'Windows', 'SQL (' + User + ')'));
+    RunLogMemo.Lines.Add('Mode: ' + IfThen(OnlyFailedChk.Checked,
+      Format('re-run failed only (%d database(s))', [Databases.Count]),
+      Format('all databases (%d)', [Databases.Count])));
     RunLogMemo.Lines.Add('');
 
     RunProgressBar.Min := 0;
@@ -1106,10 +1406,26 @@ begin
       RunResultsGrid.Cells[1, RunResultsGrid.RowCount - 1] := 'running...';
       Application.ProcessMessages;
 
-      ExitCode := RunSqlcmd(Server, Db, User, Password, SqlFile, WinAuth, Output);
-      Errors := CountSqlErrors(Output);
+      Attempt := 0;
+      repeat
+        ExitCode := RunSqlcmd(Server, Db, User, Password, SqlFile, WinAuth,
+          LoginTO, QueryTO, Output);
+        Errors := CountSqlErrors(Output);
+        RunOk := (Errors = 0) and (ExitCode = 0);
+        if RunOk or FCancelRequested or (ExitCode = -2) then
+          Break;
+        // Only retry connection/network problems - a plain SQL error will just recur.
+        ConnFail := (ExitCode <> 0) or LooksLikeConnectivityFailure(Output);
+        if (not ConnFail) or (Attempt >= Retries) then
+          Break;
+        Inc(Attempt);
+        RunLogMemo.Lines.Add(Format('%s: connection problem - retry %d of %d in %d s...',
+          [Db, Attempt, Retries, RetryWait]));
+        Application.ProcessMessages;
+        InterruptibleSleep(RetryWait);
+      until FCancelRequested;
 
-      if (Errors = 0) and (ExitCode = 0) then
+      if RunOk then
         Status := 'OK'
       else
         Status := 'ERROR';
@@ -1133,6 +1449,11 @@ begin
       RunProgressBar.Position := i + 1;
       Application.ProcessMessages;
 
+      if FCancelRequested then
+      begin
+        RunLogMemo.Lines.Add('*** Run cancelled by user. ***');
+        Break;
+      end;
       if ExitCode = -2 then
       begin
         // sqlcmd could not be launched at all - stop, every DB would fail the same way.
@@ -1142,15 +1463,83 @@ begin
       end;
     end;
 
+    Processed := RunResultsGrid.RowCount - 1; // databases actually run (grid data rows)
+
+    // Remember which databases failed so "Re-run failed only" can target them next.
+    if FLastFailedDbs = nil then
+      FLastFailedDbs := TStringList.Create;
+    FLastFailedDbs.Clear;
+    for i := 1 to RunResultsGrid.RowCount - 1 do
+      if RunResultsGrid.Cells[1, i] = 'ERROR' then
+        FLastFailedDbs.Add(RunResultsGrid.Cells[0, i]);
+
     RunLogMemo.Lines.Add('');
-    RunLogMemo.Lines.Add(Format('Done: %d database(s), %d failed.',
-      [Databases.Count, FailCount]));
-    ShowMessage(Format('Finished running on %d database(s).' + sLineBreak +
-      '%d succeeded, %d failed.' + sLineBreak +
-      'See the log for details of any failures.',
-      [Databases.Count, Databases.Count - FailCount, FailCount]));
+    RunLogMemo.Lines.Add(Format('Done: %d database(s) run, %d failed.%s',
+      [Processed, FailCount,
+       IfThen(FCancelRequested, ' (cancelled before finishing)', '')]));
+
+    // Auto-save the run output into the release folder (next to the SQL file).
+    LogPath := '';
+    if Trim(SqlFile) <> '' then
+    begin
+      LogBase := IncludeTrailingPathDelimiter(ExtractFilePath(SqlFile)) +
+        ChangeFileExt(ExtractFileName(SqlFile), '');
+      LogPath := LogBase + '_RunLog.txt';
+      ResPath := LogBase + '_RunResults.csv';
+      try
+        // Preserve the previous run's outputs (paired, same index) so the clean
+        // "_RunResults.csv"/"_RunLog.txt" names always hold the latest run.
+        DidBackup := False;
+        BkIdx := 1;
+        while FileExists(IndexedName(ResPath, BkIdx)) or
+              FileExists(IndexedName(LogPath, BkIdx)) do
+          Inc(BkIdx);
+        if FileExists(ResPath) then
+        begin
+          RenameFile(ResPath, IndexedName(ResPath, BkIdx));
+          DidBackup := True;
+        end;
+        if FileExists(LogPath) then
+        begin
+          RenameFile(LogPath, IndexedName(LogPath, BkIdx));
+          DidBackup := True;
+        end;
+        if DidBackup then
+          RunLogMemo.Lines.Add('Previous run backed up with suffix _' + IntToStr(BkIdx));
+
+        ResList := TStringList.Create;
+        try
+          ResList.Add('Database,Result,Errors');
+          for i := 1 to RunResultsGrid.RowCount - 1 do
+            ResList.Add('"' + RunResultsGrid.Cells[0, i] + '","' +
+              RunResultsGrid.Cells[1, i] + '","' + RunResultsGrid.Cells[2, i] + '"');
+          ResList.SaveToFile(ResPath);
+        finally
+          ResList.Free;
+        end;
+        RunLogMemo.Lines.Add('Saved results: ' + ResPath);
+        RunLogMemo.Lines.SaveToFile(LogPath); // save last so it includes the note above
+        RunLogMemo.Lines.Add('Saved log: ' + LogPath);
+      except
+        on E: Exception do
+          RunLogMemo.Lines.Add('Could not auto-save run output: ' + E.Message);
+      end;
+    end;
+
+    ShowMessage(Format('%s on %d database(s).' + sLineBreak +
+      '%d succeeded, %d failed.' + sLineBreak + '%s',
+      [IfThen(FCancelRequested, 'Cancelled', 'Finished'), Processed,
+       Processed - FailCount, FailCount,
+       IfThen(LogPath <> '', 'Log + results saved next to the SQL file.',
+         'See the log for details of any failures.')]));
   finally
     Databases.Free;
+    FRunning := False;
+    FCancelRequested := False;
+    RunBtn.Enabled := True;
+    LoadFailedBtn.Enabled := True;
+    ExportRunLogBtn.Enabled := True;
+    CancelBtn.Enabled := False;
   end;
 end;
 
