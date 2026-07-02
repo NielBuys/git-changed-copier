@@ -19,6 +19,7 @@ object MainFrm: TMainFrm
     Anchors = [akTop, akLeft, akRight, akBottom]
     TabIndex = 0
     TabOrder = 0
+    OnChange = PageControl1Change
     object CopyChangedGitFilesTab: TTabSheet
       Caption = 'Copy Changed Git Files'
       ClientHeight = 607
@@ -185,79 +186,290 @@ object MainFrm: TMainFrm
       Caption = 'Generate Single SQL File'
       ClientHeight = 607
       ClientWidth = 682
-      object SqlRootLbl: TLabel
+      object GenInfoHdrLbl: TLabel
         Left = 16
         Height = 20
-        Top = 32
-        Width = 70
-        Caption = 'SQL Folder'
+        Top = 12
+        Width = 480
+        Caption = 'Details from "Copy Changed Files" tab (review before generating):'
       end
-      object SqlRootEdt: TEdit
-        Left = 224
+      object GenRepoLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 46
+        Width = 70
+        Caption = 'Repository'
+      end
+      object GenRepoEdt: TEdit
+        Left = 180
         Height = 28
-        Top = 24
-        Width = 435
+        Top = 42
+        Width = 479
         Anchors = [akTop, akLeft, akRight]
+        ReadOnly = True
+        TabStop = False
         TabOrder = 0
-        TextHint = 'C:\deploy\ChangedSQLFiles\v1.1.0\SQL'
+      end
+      object GenFromTagLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 82
+        Width = 100
+        Caption = 'From tag (start)'
+      end
+      object GenFromTagEdt: TEdit
+        Left = 180
+        Height = 28
+        Top = 78
+        Width = 200
+        ReadOnly = True
+        TabStop = False
+        TabOrder = 1
+      end
+      object GenToTagLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 118
+        Width = 106
+        Caption = 'To tag (release)'
+      end
+      object GenToTagEdt: TEdit
+        Left = 180
+        Height = 28
+        Top = 114
+        Width = 200
+        ReadOnly = True
+        TabStop = False
+        TabOrder = 2
+      end
+      object GenSqlFolderLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 154
+        Width = 118
+        Caption = 'SQL source folder'
+      end
+      object GenSqlFolderEdt: TEdit
+        Left = 180
+        Height = 28
+        Top = 150
+        Width = 479
+        Anchors = [akTop, akLeft, akRight]
+        ReadOnly = True
+        TabStop = False
+        TabOrder = 3
       end
       object EnvFileLbl: TLabel
         Left = 16
         Height = 20
-        Top = 72
+        Top = 194
         Width = 106
         Caption = 'Environment File'
       end
       object EnvFileEdt: TEdit
-        Left = 224
+        Left = 180
         Height = 28
-        Top = 64
-        Width = 435
+        Top = 190
+        Width = 479
         Anchors = [akTop, akLeft, akRight]
-        TabOrder = 1
+        TabOrder = 4
         TextHint = 'C:\deploy\config\Production.json'
+        OnChange = EnvFileEdtChange
       end
       object PassesLbl: TLabel
         Left = 16
         Height = 20
-        Top = 112
+        Top = 230
         Width = 44
         Caption = 'Passes'
       end
       object PassesEdt: TEdit
-        Left = 224
+        Left = 180
         Height = 28
-        Top = 104
+        Top = 226
         Width = 80
-        TabOrder = 2
+        TabOrder = 5
         Text = '1'
+        OnChange = EnvFileEdtChange
+      end
+      object GenOutFileLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 266
+        Width = 78
+        Caption = 'Will save as'
+      end
+      object GenOutFileEdt: TEdit
+        Left = 180
+        Height = 28
+        Top = 262
+        Width = 479
+        Anchors = [akTop, akLeft, akRight]
+        ReadOnly = True
+        TabStop = False
+        TabOrder = 6
       end
       object GenerateBtn: TButton
-        Left = 224
+        Left = 180
         Height = 31
-        Top = 144
+        Top = 300
         Width = 200
         Caption = 'Generate Single File'
-        TabOrder = 3
+        TabOrder = 7
         OnClick = GenerateBtnClick
       end
       object GenProgressBar: TProgressBar
         Left = 16
         Height = 25
-        Top = 192
+        Top = 344
         Width = 643
         Anchors = [akTop, akLeft, akRight]
-        TabOrder = 4
+        TabOrder = 8
       end
       object GenLogMemo: TMemo
         Left = 16
-        Height = 375
-        Top = 224
+        Height = 215
+        Top = 380
         Width = 643
         Anchors = [akTop, akLeft, akRight, akBottom]
         ReadOnly = True
         ScrollBars = ssAutoBoth
+        TabOrder = 9
+        WordWrap = False
+      end
+    end
+    object RunDatabasesTab: TTabSheet
+      Caption = 'Run On Databases'
+      ClientHeight = 607
+      ClientWidth = 682
+      object ServerLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 32
+        Width = 68
+        Caption = 'SQL Server'
+      end
+      object ServerEdt: TEdit
+        Left = 140
+        Height = 28
+        Top = 24
+        Width = 220
+        TabOrder = 0
+        TextHint = 'localhost\instance'
+      end
+      object WindowsAuthChk: TCheckBox
+        Left = 384
+        Height = 24
+        Top = 26
+        Width = 220
+        Caption = 'Windows Authentication'
+        OnChange = WindowsAuthChkChange
+        TabOrder = 1
+      end
+      object UserLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 72
+        Width = 30
+        Caption = 'User'
+      end
+      object UserEdt: TEdit
+        Left = 140
+        Height = 28
+        Top = 64
+        Width = 220
+        TabOrder = 2
+      end
+      object PasswordLbl: TLabel
+        Left = 384
+        Height = 20
+        Top = 72
+        Width = 62
+        Caption = 'Password'
+      end
+      object PasswordEdt: TEdit
+        Left = 470
+        Height = 28
+        Top = 64
+        Width = 189
+        Anchors = [akTop, akLeft, akRight]
+        EchoMode = emPassword
+        TabOrder = 3
+      end
+      object RunEnvFileLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 112
+        Width = 106
+        Caption = 'Environment File'
+      end
+      object RunEnvFileEdt: TEdit
+        Left = 140
+        Height = 28
+        Top = 104
+        Width = 519
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 4
+        TextHint = 'C:\deploy\config\Production.json'
+      end
+      object RunSqlFileLbl: TLabel
+        Left = 16
+        Height = 20
+        Top = 152
+        Width = 96
+        Caption = 'SQL File to Run'
+      end
+      object RunSqlFileEdt: TEdit
+        Left = 140
+        Height = 28
+        Top = 144
+        Width = 519
+        Anchors = [akTop, akLeft, akRight]
         TabOrder = 5
+        TextHint = 'C:\deploy\ChangedSQLFiles\v1.1.0\Single.sql'
+      end
+      object RunBtn: TButton
+        Left = 140
+        Height = 31
+        Top = 184
+        Width = 200
+        Caption = 'Run on All Databases'
+        OnClick = RunBtnClick
+        TabOrder = 6
+      end
+      object RunProgressBar: TProgressBar
+        Left = 16
+        Height = 25
+        Top = 228
+        Width = 643
+        Anchors = [akTop, akLeft, akRight]
+        TabOrder = 7
+      end
+      object RunResultsGrid: TStringGrid
+        Left = 16
+        Height = 150
+        Top = 260
+        Width = 643
+        Anchors = [akTop, akLeft, akRight]
+        ColCount = 3
+        FixedCols = 0
+        RowCount = 1
+        TabOrder = 8
+        ColWidths = (
+          340
+          100
+          90
+        )
+      end
+      object RunLogMemo: TMemo
+        Left = 16
+        Height = 175
+        Top = 420
+        Width = 643
+        Anchors = [akTop, akLeft, akRight, akBottom]
+        ReadOnly = True
+        ScrollBars = ssAutoBoth
+        TabOrder = 9
         WordWrap = False
       end
     end

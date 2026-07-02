@@ -1,6 +1,6 @@
 # Copy Changed Git Files
 
-A simple Windows GUI tool (built with Lazarus/Free Pascal) with two features:
+A simple Windows GUI tool (built with Lazarus/Free Pascal) with three features:
 
 1. **Copy Changed Files** — extract every file changed between a Git tag and `HEAD`
    (optionally filtered by extension) and copy them to a target folder, preserving
@@ -8,6 +8,9 @@ A simple Windows GUI tool (built with Lazarus/Free Pascal) with two features:
 2. **Generate Single SQL File** — consolidate a set of `.sql` scripts into one ordered
    file, driven by small JSON config files, so a whole release can be run as a single
    script per database.
+3. **Run On Databases** — run a `.sql` file against every database listed in an
+   environment JSON via `sqlcmd`, reporting per-database success/error counts so you
+   can fix and re-run.
 
 ---
 
@@ -30,6 +33,9 @@ A simple Windows GUI tool (built with Lazarus/Free Pascal) with two features:
 - [Git](https://git-scm.com/) installed and available in the system `PATH`
 - Windows
 - [Lazarus](https://www.lazarus-ide.org/) (Free Pascal) to build from source
+- For **Run On Databases**: the SQL Server command-line tool
+  [`sqlcmd`](https://learn.microsoft.com/sql/tools/sqlcmd/sqlcmd-utility) installed and
+  on the `PATH`
 
 ---
 
@@ -69,15 +75,29 @@ followed by `_` (e.g. `1_myview.sql`) — on either side, so `0_myview.sql` matc
 Consolidates the `.sql` scripts for a named *environment* into **one ordered `.sql`
 file** that you can run once per database.
 
+This tab **reuses the Copy Changed Files tab's settings** and shows them read-only so you
+can review before generating. The source folder and output location are both derived from
+them — you don't pick them here:
+
+- **SQL source folder** (read-only) = `<To Base Folder Path>\<To Git Tag>\SQL` — the change
+  set produced by Tab 1.
+- **Output file** (read-only, shown as *Will save as*) = saved into
+  `<To Base Folder Path>\<To Git Tag>\` with an audit-friendly name:
+  `<ToTag>_<Environment>_from_<FromTag>.sql`.
+
 | Field | Meaning |
 |-------|---------|
-| **SQL Folder** | The folder that contains the module sub-folders (see layout below). Point it at Tab 1's output (`…\v1.1.0\SQL`) to bundle only the changed scripts, or at the full tree to bundle everything. |
+| **Repository / From tag / To tag / SQL source folder** | Read-only, mirrored from Tab 1 for review. |
 | **Environment File** | Full path to an environment JSON file (see below). Script-set definitions are read automatically from a `Scripts\` folder next to it. |
 | **Passes** | How many times to emit the whole ordered set (default `1`). |
+| **Will save as** | Read-only, the computed output path. |
 
-Click **Generate Single File** and choose where to save. Only folders that actually
-exist under the *SQL Folder* are included, so pointing it at a changed-files tree yields
-a file with just those scripts, in the correct order.
+Click **Generate Single File** — it writes straight to the computed path (asking before
+overwriting an existing file) and pre-fills the *Run On Databases* tab with the result.
+Only folders that actually exist under the SQL source folder are included, so a changed-
+files tree yields a file with just those scripts, in the correct order. The generated
+file starts with an audit header recording the repository, from/to tags, environment,
+target databases, script order, timestamp and pass count.
 
 ### How files are ordered
 
@@ -155,6 +175,37 @@ view whose dependency has not been created yet) is reported by the SQL client bu
 execution continues with the next batch. Set **Passes** to `2` or `3` to emit the whole
 ordered set multiple times so forward dependencies resolve in a single execution — or
 leave it at `1` and run the generated file more than once.
+
+---
+
+## ▶️ Tab 3 — Run On Databases
+
+Runs a `.sql` file against **every database** listed in an environment file's
+`Databases` field, using `sqlcmd`.
+
+| Field | Meaning |
+|-------|---------|
+| **SQL Server** | Server / instance, e.g. `localhost\instance` or `10.0.0.5` |
+| **Windows Authentication** | Tick to connect with the current Windows account (`sqlcmd -E`). Untick to use **User** + **Password** (SQL login). |
+| **User** / **Password** | SQL login credentials (ignored when Windows Authentication is ticked) |
+| **Environment File** | An environment JSON (see Tab 2). Its `Databases` value (comma-separated) is the list of databases to run against. |
+| **SQL File to Run** | The `.sql` file to execute — typically the file produced by Tab 2. |
+
+Click **Run on All Databases**. For each database the tool runs
+`sqlcmd -S <server> [-E | -U <user>] -d <db> -i <file> -f 65001` and:
+
+- shows a row in the results grid with **OK** / **ERROR** and the error count;
+- writes the full `sqlcmd` output for any failed database to the log below, so you can
+  read the `Msg … Level … Line …` errors, fix the SQL, and run again.
+
+The password is passed to `sqlcmd` via the `SQLCMDPASSWORD` environment variable, so it
+never appears on the command line. `sqlcmd` is **not** run with `-b`, so a failing batch
+is reported but execution continues to the next `GO` batch (and the next database).
+Nothing is wrapped in a transaction.
+
+> **Security note:** so the fields are remembered between runs, the SQL password is
+> stored in plain text in `ChangedGitFiles.ini` next to the executable. Clear the
+> Password field before closing if you do not want it saved.
 
 ---
 
