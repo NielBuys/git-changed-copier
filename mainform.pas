@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ComCtrls,
-  Grids, Process, FileUtil, IniFiles, StrUtils;
+  Grids, Process, FileUtil, IniFiles, StrUtils, fpjson, jsonparser;
 
 type
 
@@ -19,6 +19,8 @@ type
     CopyChangedFilesBtn: TButton;
     DependentSQLFoldersEdt: TEdit;
     DependentSQLFoldersLbl: TLabel;
+    EnvFileEdt: TEdit;
+    EnvFileLbl: TLabel;
     ExportChangedFilesBtn: TButton;
     FiltersEdt: TEdit;
     FiltersLbl: TLabel;
@@ -26,12 +28,20 @@ type
     FromBaseFolderLbl: TLabel;
     FromTagEdt: TEdit;
     FromTagLbl: TLabel;
+    GenerateBtn: TButton;
+    GenerateSingleFileTab: TTabSheet;
+    GenLogMemo: TMemo;
+    GenProgressBar: TProgressBar;
     MainSQLFolderEdt: TEdit;
     MainSQLFolderLbl: TLabel;
     PageControl1: TPageControl;
     CopyChangedGitFilesTab: TTabSheet;
+    PassesEdt: TEdit;
+    PassesLbl: TLabel;
     ProgressBar1: TProgressBar;
     SaveDialog1: TSaveDialog;
+    SqlRootEdt: TEdit;
+    SqlRootLbl: TLabel;
     ToBaseFolderEdt: TEdit;
     ToGitTagEdt: TEdit;
     ToGitTagLbl: TLabel;
@@ -40,8 +50,12 @@ type
     procedure ExportChangedFilesBtnClick(Sender: TObject);
     procedure FormClose(Sender: TObject; var CloseAction: TCloseAction);
     procedure FormShow(Sender: TObject);
+    procedure GenerateBtnClick(Sender: TObject);
   private
     function FolderHasAnyFiles(const Dir: string): Boolean;
+    function ReadJSONStringField(const AFileName, AField: string): string;
+    procedure StreamWriteText(AStream: TStream; const AText: string);
+    procedure StreamAppendFile(AStream: TStream; const AFileName: string);
     function GetChangedFilesList(
       const FromGitTag, FromBasePath, FileFilter: string): TStringList;
     function CopyFilesToDest(Files: TStringList;
@@ -192,6 +206,9 @@ begin
     Ini.WriteString('Settings', 'Filters', FiltersEdt.Text);
     Ini.WriteString('Settings', 'MainSQLFolder', MainSQLFolderEdt.Text);
     Ini.WriteString('Settings', 'DependentSQLFolders', DependentSQLFoldersEdt.Text);
+    Ini.WriteString('Settings', 'SqlRoot', SqlRootEdt.Text);
+    Ini.WriteString('Settings', 'EnvFile', EnvFileEdt.Text);
+    Ini.WriteString('Settings', 'Passes', PassesEdt.Text);
   finally
     Ini.Free;
   end;
@@ -214,6 +231,9 @@ begin
       FiltersEdt.Text := Ini.ReadString('Settings', 'Filters', '');
       MainSQLFolderEdt.Text := Ini.ReadString('Settings', 'MainSQLFolder', '');
       DependentSQLFoldersEdt.Text := Ini.ReadString('Settings', 'DependentSQLFolders', '');
+      SqlRootEdt.Text := Ini.ReadString('Settings', 'SqlRoot', '');
+      EnvFileEdt.Text := Ini.ReadString('Settings', 'EnvFile', '');
+      PassesEdt.Text := Ini.ReadString('Settings', 'Passes', '1');
     finally
       Ini.Free;
     end;
@@ -485,6 +505,224 @@ begin
       end;
     until FindNext(SR) <> 0;
     FindClose(SR);
+  end;
+end;
+
+{ Reads a single top-level string field from a JSON file. Returns '' if the file
+  is missing/invalid or the field is absent. }
+function TMainFrm.ReadJSONStringField(const AFileName, AField: string): string;
+var
+  SL: TStringList;
+  Data: TJSONData;
+begin
+  Result := '';
+  if not FileExists(AFileName) then
+    Exit;
+  SL := TStringList.Create;
+  try
+    SL.LoadFromFile(AFileName);
+    try
+      Data := GetJSON(SL.Text);
+      try
+        if Data is TJSONObject then
+          Result := TJSONObject(Data).Get(AField, '');
+      finally
+        Data.Free;
+      end;
+    except
+      Result := ''; // malformed JSON
+    end;
+  finally
+    SL.Free;
+  end;
+end;
+
+{ Writes raw text (ASCII/UTF-8 bytes) to a stream. }
+procedure TMainFrm.StreamWriteText(AStream: TStream; const AText: string);
+begin
+  if AText <> '' then
+    AStream.WriteBuffer(AText[1], Length(AText));
+end;
+
+{ Appends the raw bytes of a file to a stream (preserves original encoding). }
+procedure TMainFrm.StreamAppendFile(AStream: TStream; const AFileName: string);
+var
+  FS: TFileStream;
+begin
+  FS := TFileStream.Create(AFileName, fmOpenRead or fmShareDenyWrite);
+  try
+    if FS.Size > 0 then
+      AStream.CopyFrom(FS, FS.Size);
+  finally
+    FS.Free;
+  end;
+end;
+
+{ Builds a single consolidated .sql file for an environment, in the same order the
+  SQLUpdate runner uses: the environment's "Scripts" list (module order) -> each
+  module's Config/Scripts/<module>.json "Folders" list (folder order) -> the *.sql
+  files in each folder sorted by name (non-recursive). Files are separated by GO so
+  each object is its own batch and a failure in one does not stop the rest. The
+  whole ordered set is emitted "Passes" times so forward dependencies can resolve
+  in a single execution. }
+procedure TMainFrm.GenerateBtnClick(Sender: TObject);
+var
+  SqlRoot, EnvFile, ScriptsDir, EnvName, Databases, ScriptsCsv: string;
+  DefFile, ModuleFolderName, FoldersCsv, FolderDir, RelLabel: string;
+  ScriptNames, Folders, SqlFiles: TStringList;
+  OutStream: TFileStream;
+  Passes, p, si, fi, gi, IncludedPerPass: Integer;
+
+  procedure SplitCsv(const S: string; List: TStringList);
+  begin
+    List.Clear;
+    List.Delimiter := ',';
+    List.StrictDelimiter := True; // keep spaces inside names (e.g. "Stored Procedures")
+    List.DelimitedText := S;
+  end;
+
+begin
+  SqlRoot := Trim(SqlRootEdt.Text);
+  EnvFile := Trim(EnvFileEdt.Text);
+
+  if (SqlRoot = '') or not DirectoryExists(SqlRoot) then
+  begin
+    ShowMessage('Please enter a valid SQL Folder (the folder containing the module ' +
+      'sub-folders, e.g. ...\SQL).');
+    Exit;
+  end;
+  if (EnvFile = '') or not FileExists(EnvFile) then
+  begin
+    ShowMessage('Please enter a valid Environment File ' +
+      '(e.g. C:\Development\SQLUpdate\Config\WineMS2.json).');
+    Exit;
+  end;
+
+  Passes := StrToIntDef(Trim(PassesEdt.Text), 1);
+  if Passes < 1 then
+    Passes := 1;
+
+  // Script definitions live in the "Scripts" folder next to the environment file.
+  ScriptsDir := IncludeTrailingPathDelimiter(ExtractFilePath(EnvFile)) + 'Scripts';
+  EnvName := ChangeFileExt(ExtractFileName(EnvFile), '');
+  Databases := ReadJSONStringField(EnvFile, 'Databases');
+  ScriptsCsv := ReadJSONStringField(EnvFile, 'Scripts'); // matches runner: "Scripts" only
+
+  if Trim(ScriptsCsv) = '' then
+  begin
+    ShowMessage('The environment file has no "Scripts" list: ' + EnvFile);
+    Exit;
+  end;
+
+  // Ask where to save the generated file.
+  SaveDialog1.Title := 'Save Generated SQL File';
+  SaveDialog1.DefaultExt := 'sql';
+  SaveDialog1.Filter := 'SQL Files (*.sql)|*.sql|All Files (*.*)|*.*';
+  SaveDialog1.FileName := EnvName + '.sql';
+  if not SaveDialog1.Execute then
+    Exit;
+
+  GenLogMemo.Clear;
+  ScriptNames := TStringList.Create;
+  Folders := TStringList.Create;
+  OutStream := TFileStream.Create(SaveDialog1.FileName, fmCreate);
+  try
+    // File header
+    StreamWriteText(OutStream,
+      '-- Generated single SQL file for environment: ' + EnvName + sLineBreak +
+      '-- Target databases: ' + Databases + sLineBreak +
+      '-- Scripts (order): ' + ScriptsCsv + sLineBreak +
+      '-- Generated: ' + FormatDateTime('yyyy-mm-dd hh:nn:ss', Now) + sLineBreak +
+      '-- Passes: ' + IntToStr(Passes) + sLineBreak +
+      'GO' + sLineBreak);
+
+    GenLogMemo.Lines.Add('Environment : ' + EnvName);
+    GenLogMemo.Lines.Add('Databases   : ' + Databases);
+    GenLogMemo.Lines.Add('Scripts     : ' + ScriptsCsv);
+    GenLogMemo.Lines.Add('Passes      : ' + IntToStr(Passes));
+    GenLogMemo.Lines.Add('');
+
+    SplitCsv(ScriptsCsv, ScriptNames);
+    ProgressBar1.Position := 0;
+    GenProgressBar.Min := 0;
+    GenProgressBar.Max := Passes;
+    GenProgressBar.Position := 0;
+
+    for p := 1 to Passes do
+    begin
+      StreamWriteText(OutStream, sLineBreak +
+        '-- ===================== PASS ' + IntToStr(p) + ' =====================' +
+        sLineBreak + 'GO' + sLineBreak);
+      if Passes > 1 then
+        GenLogMemo.Lines.Add('===== PASS ' + IntToStr(p) + ' =====');
+
+      IncludedPerPass := 0;
+
+      for si := 0 to ScriptNames.Count - 1 do
+      begin
+        if Trim(ScriptNames[si]) = '' then
+          Continue;
+
+        DefFile := IncludeTrailingPathDelimiter(ScriptsDir) + Trim(ScriptNames[si]) + '.json';
+        if not FileExists(DefFile) then
+        begin
+          if p = 1 then
+            GenLogMemo.Lines.Add('  [skip] missing script definition: ' + DefFile);
+          Continue;
+        end;
+
+        ModuleFolderName := ReadJSONStringField(DefFile, 'Name');
+        if ModuleFolderName = '' then
+          ModuleFolderName := Trim(ScriptNames[si]);
+        FoldersCsv := ReadJSONStringField(DefFile, 'Folders');
+
+        SplitCsv(FoldersCsv, Folders);
+        for fi := 0 to Folders.Count - 1 do
+        begin
+          if Trim(Folders[fi]) = '' then
+            Continue;
+
+          FolderDir := IncludeTrailingPathDelimiter(SqlRoot) +
+            ModuleFolderName + PathDelim + Trim(Folders[fi]);
+          if not DirectoryExists(FolderDir) then
+            Continue;
+
+          // Non-recursive, *.sql only, sorted by file name (matches the runner).
+          SqlFiles := FindAllFiles(FolderDir, '*.sql', False);
+          try
+            SqlFiles.Sort;
+            for gi := 0 to SqlFiles.Count - 1 do
+            begin
+              RelLabel := ModuleFolderName + PathDelim + Trim(Folders[fi]) +
+                PathDelim + ExtractFileName(SqlFiles[gi]);
+              StreamWriteText(OutStream, sLineBreak +
+                '-- ===== ' + RelLabel + ' =====' + sLineBreak);
+              StreamAppendFile(OutStream, SqlFiles[gi]);
+              StreamWriteText(OutStream, sLineBreak + 'GO' + sLineBreak);
+              Inc(IncludedPerPass);
+              if p = 1 then
+                GenLogMemo.Lines.Add('  ' + RelLabel);
+            end;
+          finally
+            SqlFiles.Free;
+          end;
+        end;
+      end;
+
+      GenProgressBar.Position := p;
+      Application.ProcessMessages;
+    end;
+
+    GenLogMemo.Lines.Add('');
+    GenLogMemo.Lines.Add(Format('Done: %d file(s) per pass x %d pass(es) -> %s',
+      [IncludedPerPass, Passes, SaveDialog1.FileName]));
+    ShowMessage(Format('Generated single SQL file:' + sLineBreak + '%s' + sLineBreak +
+      sLineBreak + '%d file(s) per pass, %d pass(es).',
+      [SaveDialog1.FileName, IncludedPerPass, Passes]));
+  finally
+    OutStream.Free;
+    ScriptNames.Free;
+    Folders.Free;
   end;
 end;
 
